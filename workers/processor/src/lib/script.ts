@@ -31,13 +31,7 @@ export function buildNarrationScript(input: {
 }): string {
   const body = input.textContent?.trim() || "This post did not include extractable text.";
 
-  return [
-    body,
-    "",
-    "End of article."
-  ]
-    .filter(Boolean)
-    .join("\n");
+  return body;
 }
 
 export function estimateAudioMinutes(script: string): number {

@@ -25,7 +25,7 @@ const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL ?? "";
 const GEMINI_TTS_MODE = process.env.GEMINI_TTS_MODE ?? "auto";
 const GEMINI_API_VERSION = process.env.GEMINI_API_VERSION ?? "v1beta";
 const GEMINI_SCRIPT_MODEL = process.env.GEMINI_SCRIPT_MODEL ?? "gemini-3-flash-preview";
-const SITE_PLUG = process.env.PODNARR_SITE_URL ?? "podnarr";
+const SITE_PLUG = process.env.PODNARR_SITE_URL ?? "podnarr.yet-to-be.com";
 const NARRATION_STYLE_PROMPT =
   process.env.NARRATION_STYLE_PROMPT ??
   "Read this as an American male podcast host with a dry, deadpan, slightly dramatic delivery: calm, serious, precise, and restrained. Keep the cadence brisk and conversational. Use natural, brief pauses around quotations and section transitions. Avoid cheerfulness, sales energy, theatricality, exaggerated intonation, and long pauses.";
