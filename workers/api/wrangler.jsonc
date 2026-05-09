@@ -38,7 +38,7 @@
     "PUBLIC_UI_BASE_URL": "https://podnarr.yet-to-be.com",
     "APP_BASE_URL": "https://podnarr.yet-to-be.com",
     "PROCESSING_VERSION": "v1",
-    "MAX_POSTS_PER_REFRESH": "3"
+    "MAX_POSTS_PER_REFRESH": "1"
   },
   "routes": [
     { "pattern": "podnarr.yet-to-be.com", "custom_domain": true }

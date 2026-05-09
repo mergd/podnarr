@@ -134,26 +134,69 @@ function normalizeIsoDate(value: string | null): string | null {
   return Number.isFinite(ms) ? new Date(ms).toISOString() : value;
 }
 
-function pickImage(node: Record<string, unknown>, channel: Record<string, unknown>): string | null {
+// Substack often serves images via a CDN with `_/w_NNN` size hints. Strip them so
+// we get the largest available rendition and let downstream consumers resize.
+function upgradeImageQuality(src: string): string {
+  return src.replace(/\/w_\d+(?:,[^,/]+)*\b/g, "/w_1200");
+}
+
+function isUsablePostImage(src: string): boolean {
+  if (!/^https?:\/\//i.test(src)) {
+    return false;
+  }
+  const lower = src.toLowerCase();
+  // Filter out tracking pixels, share buttons, signup CTAs, and other chrome.
+  if (/\b(?:pixel|spacer|1x1|tracker)\b/.test(lower)) {
+    return false;
+  }
+  if (/substackcdn\.com\/image\/fetch\/.+\/(?:icon|button|share)/.test(lower)) {
+    return false;
+  }
+  return true;
+}
+
+function pickImageFromHtml(html: string | null): string | null {
+  if (!html) {
+    return null;
+  }
+  const imgPattern = /<img\b([^>]*)>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = imgPattern.exec(html)) !== null) {
+    const src = attrValue(match[1] ?? "", "src");
+    if (src && isUsablePostImage(src)) {
+      return upgradeImageQuality(src);
+    }
+  }
+  return null;
+}
+
+function pickImage(
+  node: Record<string, unknown>,
+  channel: Record<string, unknown>,
+  htmlContent: string | null
+): string | null {
   const mediaContent = node["media:content"];
   if (mediaContent && typeof mediaContent === "object" && "url" in mediaContent) {
-    return getString((mediaContent as { url?: unknown }).url);
+    const url = getString((mediaContent as { url?: unknown }).url);
+    if (url) return url;
   }
 
   const enclosure = node.enclosure;
   if (enclosure && typeof enclosure === "object" && "type" in enclosure) {
     const type = getString((enclosure as { type?: unknown }).type);
     if (type?.startsWith("image/")) {
-      return getString((enclosure as { url?: unknown }).url);
+      const url = getString((enclosure as { url?: unknown }).url);
+      if (url) return url;
     }
   }
 
   const image = node["itunes:image"] ?? channel["itunes:image"];
   if (image && typeof image === "object" && "href" in image) {
-    return getString((image as { href?: unknown }).href);
+    const url = getString((image as { href?: unknown }).href);
+    if (url) return url;
   }
 
-  return null;
+  return pickImageFromHtml(htmlContent);
 }
 
 function extractVisualMetadata(html: string | null): VisualMetadata[] {
@@ -236,7 +279,7 @@ export async function fetchSubstackFeed(feedUrl: string): Promise<SourcePublicat
       textContent,
       visualMetadata: extractVisualMetadata(htmlContent),
       author: firstString(item["dc:creator"], item.author, channel["dc:creator"], channel.managingEditor),
-      imageUrl: pickImage(item, channel),
+      imageUrl: pickImage(item, channel, htmlContent),
       pubDate,
       pubDateMs: Number.isFinite(pubDateMs) ? pubDateMs : null
     };

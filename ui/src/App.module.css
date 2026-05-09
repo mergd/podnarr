@@ -320,6 +320,37 @@ h1 {
   border-bottom: 1px solid var(--color-border);
 }
 
+.episode[data-has-art="true"] {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-4);
+}
+
+.episodeArt {
+  display: block;
+  width: 4.5rem;
+  height: 4.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--color-bg-inset);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform 120ms ease;
+}
+
+.episodeArt img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.episodeArt:hover {
+  transform: scale(1.02);
+}
+
 .episode:last-child {
   border-bottom: 0;
 }
@@ -435,6 +466,24 @@ h1 {
   gap: var(--space-3);
 }
 
+.episodeHeader[data-has-art="true"] {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-5);
+}
+
+.episodeHeader[data-has-art="true"] .heroContent {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .episodeHeader[data-has-art="true"] {
+    grid-template-columns: 1fr;
+  }
+}
+
 .fullAudio {
   width: 100%;
   height: 40px;
@@ -539,5 +588,10 @@ h1 {
 
   .inlinePlayer {
     max-width: 100%;
+  }
+
+  .episodeArt {
+    width: 3.5rem;
+    height: 3.5rem;
   }
 }

@@ -1,6 +1,11 @@
 import type { PostQueueMessage } from "@podnarr/shared/queue";
 import { MAX_NARRATION_POLL_ATTEMPTS } from "@podnarr/shared/queue";
-import { DEFAULT_TTS_CONFIG, type NarrationJobResponse, type NarrationPollResponse } from "@podnarr/shared/tts";
+import {
+  DEFAULT_TTS_CONFIG,
+  type NarrationJobResponse,
+  type NarrationPollResponse,
+  type PrepareScriptResponse
+} from "@podnarr/shared/tts";
 
 import type { Env } from "./env";
 import { buildNarrationScript, estimateAudioMinutes } from "./lib/script";
@@ -83,12 +88,17 @@ async function handleGenerate(env: Env, message: Extract<PostQueueMessage, { typ
     throw new Error(`Post ${message.postId} was not found.`);
   }
 
-  const script = buildNarrationScript({
+  const extractedScript = buildNarrationScript({
     title: post.title,
     author: post.author,
     textContent: post.text_content,
     visualMetadataJson: post.visual_metadata_json
   });
+  const prepared = await fetchAudioService<PrepareScriptResponse>(env, "/v1/scripts/prepare", {
+    method: "POST",
+    body: JSON.stringify({ script: extractedScript })
+  });
+  const script = prepared.script;
   const estimatedMinutes = estimateAudioMinutes(script);
   const provider = (post.tts_provider ?? env.DEFAULT_TTS_PROVIDER ?? DEFAULT_TTS_CONFIG.provider) as typeof DEFAULT_TTS_CONFIG.provider;
   const model = post.tts_model ?? env.DEFAULT_TTS_MODEL ?? DEFAULT_TTS_CONFIG.model;
@@ -143,6 +153,22 @@ async function handleGenerate(env: Env, message: Extract<PostQueueMessage, { typ
 async function handlePoll(env: Env, message: Extract<PostQueueMessage, { type: "post.poll_narration" }>): Promise<void> {
   const poll = await fetchAudioService<NarrationPollResponse>(env, `/v1/narrations/${encodeURIComponent(message.externalJobId)}`);
   if (poll.status === "failed") {
+    const existing = await env.DB
+      .prepare("SELECT audio_key FROM posts WHERE id = ?1")
+      .bind(message.postId)
+      .first<{ audio_key: string | null }>();
+    if (existing?.audio_key) {
+      await env.DB
+        .prepare(
+          `UPDATE posts
+          SET status = 'ready', narration_job_status = 'succeeded', last_error = NULL, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?1`
+        )
+        .bind(message.postId)
+        .run();
+      return;
+    }
+
     const error = poll.error ?? "Narration failed";
     await env.DB
       .prepare("UPDATE posts SET status = 'failed', narration_job_status = 'failed', last_error = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?1")

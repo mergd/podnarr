@@ -27,6 +27,7 @@
       {
         "queue": "podnarr-processing",
         "max_batch_size": 1,
+        "max_concurrency": 1,
         "max_retries": 2,
         "retry_delay": 30
       }
@@ -35,7 +36,7 @@
   "vars": {
     "AUDIO_SERVICE_URL": "https://podnarr-audio-production.up.railway.app",
     "PROCESSING_VERSION": "v1",
-    "DEFAULT_TTS_PROVIDER": "gemini_batch",
+    "DEFAULT_TTS_PROVIDER": "gemini_standard",
     "DEFAULT_TTS_MODEL": "gemini-3.1-flash-tts-preview",
     "DEFAULT_TTS_VOICE": "Orus"
   },

@@ -62,20 +62,26 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function EpisodeRow({ post }: { post: PostSummary }) {
+  const targetPath = `/shows/${post.publicationSlug}/episodes/${post.id}`;
   return (
-    <article className={styles.episode}>
+    <article className={styles.episode} data-has-art={post.imageUrl ? "true" : "false"}>
+      {post.imageUrl ? (
+        <button
+          aria-label={`Open ${post.title}`}
+          className={styles.episodeArt}
+          onClick={() => navigate(targetPath)}
+          type="button"
+        >
+          <img alt="" loading="lazy" src={post.imageUrl} />
+        </button>
+      ) : null}
       <div className={styles.episodeMain}>
         <div className={styles.episodeMeta}>
           <StatusBadge status={post.status} />
           <span>{formatDate(post.pubDate)}</span>
           <span>{formatDuration(post.durationSeconds)}</span>
-          {post.estimatedCostUsd !== null ? <span>est. ${post.estimatedCostUsd.toFixed(2)}</span> : null}
         </div>
-        <button
-          className={styles.episodeTitle}
-          onClick={() => navigate(`/shows/${post.publicationSlug}/episodes/${post.id}`)}
-          type="button"
-        >
+        <button className={styles.episodeTitle} onClick={() => navigate(targetPath)} type="button">
           {post.title}
         </button>
         {post.audioUrl ? (
@@ -86,10 +92,7 @@ function EpisodeRow({ post }: { post: PostSummary }) {
           />
         ) : null}
         <div className={styles.episodeActions}>
-          <button
-            onClick={() => navigate(`/shows/${post.publicationSlug}/episodes/${post.id}`)}
-            type="button"
-          >
+          <button onClick={() => navigate(targetPath)} type="button">
             <FileText size={13} weight="duotone" />
             Transcript
           </button>
@@ -251,23 +254,26 @@ function Episode({ data }: { data: PostDetailResponse }) {
         Episodes
       </button>
       <article className={styles.episodePage}>
-        <header className={styles.episodeHeader}>
-          <p className={styles.kicker}>Episode</p>
-          <h1>{post.title}</h1>
-          <div className={styles.stats}>
-            <StatusBadge status={post.status} />
-            <span>{formatDate(post.pubDate)}</span>
-            <span>{formatDuration(post.durationSeconds)}</span>
-            {post.ttsVoice ? <span>{post.ttsVoice}</span> : null}
-          </div>
-          {post.canonicalUrl ? (
-            <div className={styles.episodeActions}>
-              <a href={post.canonicalUrl} rel="noreferrer" target="_blank">
-                <ArrowSquareOut size={13} weight="duotone" />
-                Source article
-              </a>
+        <header className={styles.episodeHeader} data-has-art={post.imageUrl ? "true" : "false"}>
+          {post.imageUrl ? <Cover src={post.imageUrl} /> : null}
+          <div className={styles.heroContent}>
+            <p className={styles.kicker}>Episode</p>
+            <h1>{post.title}</h1>
+            <div className={styles.stats}>
+              <StatusBadge status={post.status} />
+              <span>{formatDate(post.pubDate)}</span>
+              <span>{formatDuration(post.durationSeconds)}</span>
+              {post.ttsVoice ? <span>{post.ttsVoice}</span> : null}
             </div>
-          ) : null}
+            {post.canonicalUrl ? (
+              <div className={styles.episodeActions}>
+                <a href={post.canonicalUrl} rel="noreferrer" target="_blank">
+                  <ArrowSquareOut size={13} weight="duotone" />
+                  Source article
+                </a>
+              </div>
+            ) : null}
+          </div>
         </header>
         {post.audioUrl ? (
           <InlineAudioPlayer label={`Play ${post.title}`} src={post.audioUrl} />

@@ -5,7 +5,14 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 
 import Fastify from "fastify";
-import type { NarrationJobResponse, NarrationPollResponse, NarrationRequest, TtsProvider } from "@podnarr/shared/tts";
+import type {
+  NarrationJobResponse,
+  NarrationPollResponse,
+  NarrationRequest,
+  PrepareScriptRequest,
+  PrepareScriptResponse,
+  TtsProvider
+} from "@podnarr/shared/tts";
 import { DEFAULT_TTS_CONFIG } from "@podnarr/shared/tts";
 
 const PORT = Number(process.env.PORT) || 8000;
@@ -449,8 +456,7 @@ async function renderGeminiStandard(job: JobRecord, body: NarrationRequest): Pro
   const openingPath = path.join(RENDER_DIR, `${job.externalJobId}-opening.pcm`);
   const closingPath = path.join(RENDER_DIR, `${job.externalJobId}-closing.pcm`);
   const outputPath = path.join(RENDER_DIR, `${job.externalJobId}.mp3`);
-  const readAloudScript = await prepareReadAloudScript(body.script);
-  const chunks = splitScript(readAloudScript);
+  const chunks = splitScript(body.script);
   const pcmChunks: Buffer[] = [];
 
   const openingPcm = await generateGeminiPcm(job.model, job.voice, buildOpeningLine(body));
@@ -579,6 +585,20 @@ app.get("/health", async () => ({
   default_provider: DEFAULT_TTS_CONFIG.provider,
   public_base_url: PUBLIC_BASE_URL
 }));
+
+app.post<{ Body: PrepareScriptRequest }>("/v1/scripts/prepare", async (request, reply) => {
+  if (!isAuthorized(request.headers.authorization)) {
+    return reply.status(401).send({ error: "Unauthorized" });
+  }
+
+  const body = request.body;
+  if (!body?.script) {
+    return reply.status(400).send({ error: "script is required" });
+  }
+
+  const script = await prepareReadAloudScript(body.script);
+  return reply.send({ script } satisfies PrepareScriptResponse);
+});
 
 app.post<{ Body: NarrationRequest }>("/v1/narrations", async (request, reply) => {
   if (!isAuthorized(request.headers.authorization)) {

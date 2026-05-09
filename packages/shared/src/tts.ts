@@ -17,10 +17,10 @@ export interface TtsProviderConfig {
 }
 
 export const DEFAULT_TTS_CONFIG: TtsProviderConfig = {
-  provider: "gemini_batch",
+  provider: "gemini_standard",
   model: "gemini-3.1-flash-tts-preview",
   voice: "Orus",
-  estimatedCostPerAudioMinuteUsd: 0.015
+  estimatedCostPerAudioMinuteUsd: 0.03
 };
 
 export const TTS_BAKEOFF_CONFIGS: TtsProviderConfig[] = [
@@ -79,6 +79,14 @@ export interface NarrationJobResponse {
   status: NarrationJobStatus;
   estimatedAudioMinutes: number;
   estimatedCostUsd: number;
+}
+
+export interface PrepareScriptRequest {
+  script: string;
+}
+
+export interface PrepareScriptResponse {
+  script: string;
 }
 
 export interface NarrationPollResponse extends NarrationJobResponse {
