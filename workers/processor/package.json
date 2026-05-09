@@ -1,0 +1,21 @@
+{
+  "name": "podnarr-processor",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "wrangler dev",
+    "typecheck": "tsc -p tsconfig.json",
+    "types": "wrangler types"
+  },
+  "dependencies": {
+    "@podnarr/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260508.0",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.81.1"
+  }
+}

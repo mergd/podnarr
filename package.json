@@ -1,0 +1,26 @@
+{
+  "name": "podnarr",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "bun@1.3.11",
+  "workspaces": [
+    "packages/*",
+    "services/audio",
+    "ui",
+    "workers/api",
+    "workers/processor"
+  ],
+  "scripts": {
+    "build": "bun run --cwd packages/shared build && bun run --cwd ui build && bun run --cwd workers/api build && bun run --cwd workers/processor build && bun run --cwd services/audio build",
+    "dev:ui": "bun run --cwd ui dev",
+    "dev:api": "bun run --cwd workers/api dev",
+    "dev:processor": "bun run --cwd workers/processor dev",
+    "dev:audio": "bun run --cwd services/audio dev",
+    "typecheck": "bun run --cwd packages/shared typecheck && bun run --cwd ui typecheck && bun run --cwd workers/api typecheck && bun run --cwd workers/processor typecheck && bun run --cwd services/audio typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.0",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.81.1"
+  }
+}

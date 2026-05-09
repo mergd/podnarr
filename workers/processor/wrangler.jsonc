@@ -1,0 +1,46 @@
+{
+  "name": "podnarr-processor",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-05-09",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "podnarr",
+      "database_id": "134eb8ad-82ff-44f7-ad7d-d0de9d4db26a"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "AUDIO_BUCKET",
+      "bucket_name": "podnarr-audio"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "PROCESSING_QUEUE",
+        "queue": "podnarr-processing"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "podnarr-processing",
+        "max_batch_size": 1,
+        "max_retries": 2,
+        "retry_delay": 30
+      }
+    ]
+  },
+  "vars": {
+    "AUDIO_SERVICE_URL": "https://podnarr-audio-production.up.railway.app",
+    "PROCESSING_VERSION": "v1",
+    "DEFAULT_TTS_PROVIDER": "gemini_batch",
+    "DEFAULT_TTS_MODEL": "gemini-3.1-flash-tts-preview",
+    "DEFAULT_TTS_VOICE": "Orus"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}

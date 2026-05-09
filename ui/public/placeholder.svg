@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Podnarr placeholder artwork">
+  <rect width="512" height="512" fill="#15181d"/>
+  <circle cx="256" cy="256" r="112" fill="#22362f"/>
+  <path d="M188 270c0-54 30-92 68-92s68 38 68 92" fill="none" stroke="#9ad7c6" stroke-width="24" stroke-linecap="round"/>
+  <path d="M188 270v48M324 270v48" stroke="#9ad7c6" stroke-width="24" stroke-linecap="round"/>
+  <path d="M224 334h64" stroke="#eef1f4" stroke-width="22" stroke-linecap="round"/>
+</svg>
