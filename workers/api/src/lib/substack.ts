@@ -103,16 +103,16 @@ function stripHtml(html: string | null): string | null {
     return null;
   }
 
-  const withSectionLabels = html
+  const withStructuralBreaks = html
     .replace(/<h[1-6]\b[^>]*>([\s\S]*?)<\/h[1-6]>/gi, (_match, heading: string) => {
       const label = decodeHtmlEntities(heading.replace(/<[^>]+>/g, " ").replace(/[ \t]+/g, " ").trim());
-      return label ? `\n\nSection: ${label}\n\n` : "\n\n";
+      return label ? `\n\n${label}\n\n` : "\n\n";
     })
-    .replace(/<blockquote\b[^>]*>/gi, "\n\nBegin quote.\n\n")
-    .replace(/<\/blockquote>/gi, "\n\nEnd quote.\n\n")
+    .replace(/<blockquote\b[^>]*>/gi, "\n\n")
+    .replace(/<\/blockquote>/gi, "\n\n")
     .replace(/<img\b([^>]*)>/gi, (_match, attrs: string) => imageNarrationMarker(attrs));
 
-  const text = withSectionLabels
+  const text = withStructuralBreaks
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
     .replace(/<br\s*\/?>/gi, "\n")

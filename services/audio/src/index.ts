@@ -35,6 +35,13 @@ const GEMINI_CHUNK_RETRIES = Number(process.env.GEMINI_CHUNK_RETRIES) || 3;
 const JINGLE_DIR = path.join(RENDER_DIR, "assets");
 const INTRO_JINGLE_PATH = path.join(JINGLE_DIR, "intro-jingle-v7.mp3");
 const OUTRO_JINGLE_PATH = path.join(JINGLE_DIR, "outro-jingle-v7.mp3");
+const GENERIC_IMAGE_DESCRIPTIONS = [
+  /image appears here/i,
+  /there is an image/i,
+  /an image is shown/i,
+  /the image (?:shows|depicts) an image/i,
+  /^in the image,\s*(?:an? )?image/i
+];
 
 interface JobRecord {
   provider: TtsProvider;
@@ -135,7 +142,14 @@ async function describeImage(src: string): Promise<string | null> {
               parts: [
                 {
                   text:
-                    "Describe this image for a podcast listener in one concise sentence. Start with: In the image, . Do not mention alt text, filenames, or uncertainty unless the image is unreadable."
+                    [
+                      "You are describing the actual pixels of an article image for a podcast listener.",
+                      "Return one concise spoken sentence that says what the image, chart, table, or screenshot visibly contains.",
+                      "If it is a chart, mention the visible axes, labels, trend, or comparison when legible.",
+                      "Do not say 'Visual:', 'image appears here', 'an image is shown', or any placeholder wording.",
+                      "Do not mention alt text, filenames, URLs, or uncertainty unless the image is unreadable.",
+                      "Start with natural spoken phrasing such as 'The image shows...' or 'The chart shows...'."
+                    ].join(" ")
                 },
                 { inlineData: { mimeType, data } }
               ]
@@ -149,8 +163,12 @@ async function describeImage(src: string): Promise<string | null> {
       const error = payload as { error?: { message?: string } };
       throw new Error(error.error?.message ?? `image description failed with ${response.status}`);
     }
-    const description = parseTextResponse(payload);
-    return description || null;
+    const description = parseTextResponse(payload)?.replace(/^Visual:\s*/i, "").trim();
+    if (!description || GENERIC_IMAGE_DESCRIPTIONS.some((pattern) => pattern.test(description))) {
+      app.log.warn({ src, description }, "Image description was generic");
+      return null;
+    }
+    return description;
   } catch (error) {
     app.log.warn({ error, src }, "Image description failed");
     return null;
@@ -166,7 +184,7 @@ async function prepareReadAloudScript(script: string): Promise<string> {
     pieces.push(script.slice(cursor, match.index));
     const src = markerAttr(match[1] ?? "", "src");
     const description = src ? await describeImage(src) : null;
-    pieces.push(description ?? "There is an image here, but I could not inspect it clearly.");
+    pieces.push(description ?? "The article includes an image at this point, but I could not inspect it clearly.");
     cursor = (match.index ?? 0) + match[0].length;
   }
 
