@@ -40,6 +40,9 @@
     "PROCESSING_VERSION": "v1",
     "MAX_POSTS_PER_REFRESH": "1"
   },
+  "triggers": {
+    "crons": ["0 * * * *"]
+  },
   "routes": [
     { "pattern": "podnarr.yet-to-be.com", "custom_domain": true }
   ],
