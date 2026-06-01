@@ -1,5 +1,5 @@
 import { createReadStream, existsSync } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -15,7 +15,16 @@ import type {
 } from "@podnarr/shared/tts";
 import { DEFAULT_TTS_CONFIG } from "@podnarr/shared/tts";
 
-import { generateGeminiPcm, splitScript } from "./geminiTts.js";
+import { assembleEpisodeMp3 } from "./episodeAssembly.js";
+import { advanceGeminiBatchJob, createStoredJob, hydrateStoredJob } from "./geminiBatchRender.js";
+import { generateGeminiPcm } from "./geminiTts.js";
+import {
+  jobChunkDir,
+  loadStoredJob,
+  saveStoredJob,
+  writeChunkPcm,
+  type StoredJobRecord
+} from "./jobStore.js";
 
 const PORT = Number(process.env.PORT) || 8000;
 const SERVICE_TOKEN = process.env.AUDIO_SERVICE_TOKEN ?? "";
@@ -24,12 +33,9 @@ const RENDER_DIR = process.env.RENDER_DIR ?? path.join(tmpdir(), "podnarr-audio"
 const ENABLE_MOCK_RENDERER = process.env.ENABLE_MOCK_RENDERER !== "false";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL ?? "";
-const GEMINI_TTS_MODE = process.env.GEMINI_TTS_MODE ?? "auto";
 const GEMINI_API_VERSION = process.env.GEMINI_API_VERSION ?? "v1beta";
 const GEMINI_SCRIPT_MODEL = process.env.GEMINI_SCRIPT_MODEL ?? "gemini-3-flash-preview";
 const SITE_PLUG = process.env.PODNARR_SITE_URL ?? "podnarr.yet-to-be.com";
-const NARRATION_TEMPO = Number(process.env.NARRATION_TEMPO) || 1.16;
-const JINGLE_VOLUME = Number(process.env.JINGLE_VOLUME) || 1.6;
 const JINGLE_DIR = path.join(RENDER_DIR, "assets");
 const INTRO_JINGLE_PATH = path.join(JINGLE_DIR, "intro-jingle-v7.mp3");
 const OUTRO_JINGLE_PATH = path.join(JINGLE_DIR, "outro-jingle-v7.mp3");
@@ -41,20 +47,7 @@ const GENERIC_IMAGE_DESCRIPTIONS = [
   /^in the image,\s*(?:an? )?image/i
 ];
 
-interface JobRecord {
-  provider: TtsProvider;
-  model: string;
-  voice: string;
-  externalJobId: string;
-  status: "queued" | "running" | "succeeded" | "failed";
-  estimatedAudioMinutes: number;
-  estimatedCostUsd: number;
-  audioPath: string | null;
-  durationSeconds: number | null;
-  error: string | null;
-}
-
-const jobs = new Map<string, JobRecord>();
+const jobs = new Map<string, StoredJobRecord>();
 const app = Fastify({ logger: true, bodyLimit: 4 * 1024 * 1024 });
 
 function isAuthorized(authHeader: string | undefined): boolean {
@@ -93,10 +86,6 @@ function runFfmpeg(args: string[]): Promise<void> {
       }
     });
   });
-}
-
-function tempoValue(): number {
-  return Math.min(1.35, Math.max(0.8, NARRATION_TEMPO));
 }
 
 function parseTextResponse(payload: unknown): string {
@@ -206,39 +195,8 @@ async function alertDiscord(title: string, description: string): Promise<void> {
   }
 }
 
-function formatSpokenDate(value: string | null | undefined): string | null {
-  if (!value) {
-    return null;
-  }
-
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) {
-    return value;
-  }
-
-  return new Intl.DateTimeFormat("en-US", {
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-    timeZone: "UTC"
-  }).format(date);
-}
-
-function buildOpeningLine(body: NarrationRequest): string {
-  const show = body.publicationTitle?.trim() || "this publication";
-  const date = formatSpokenDate(body.pubDate);
-  const dateLine = date ? ` Published ${date}.` : "";
-  return `You're listening to ${show}. Today's article is ${body.title}.${dateLine}`;
-}
-
-function buildClosingLine(): string {
-  return `That was today's narration. Find the feed and more episodes at ${SITE_PLUG}.`;
-}
-
 async function ensureJingleAssets(): Promise<void> {
   await mkdir(JINGLE_DIR, { recursive: true });
-  // Jingles are deterministic runtime assets owned by the Railway audio service.
-  // The Worker only receives the finished MP3 in R2; it does not need these committed.
   if (!existsSync(INTRO_JINGLE_PATH)) {
     await runFfmpeg([
       "-f",
@@ -332,100 +290,75 @@ async function ensureJingleAssets(): Promise<void> {
   }
 }
 
-async function renderGeminiStandard(job: JobRecord, body: NarrationRequest): Promise<void> {
+async function getJob(externalJobId: string): Promise<StoredJobRecord | null> {
+  const cached = jobs.get(externalJobId);
+  if (cached) {
+    return cached;
+  }
+
+  const stored = await hydrateStoredJob(RENDER_DIR, externalJobId);
+  if (stored) {
+    jobs.set(externalJobId, stored);
+  }
+  return stored;
+}
+
+async function renderGeminiStandard(job: StoredJobRecord): Promise<void> {
   if (!GEMINI_API_KEY) {
     throw new Error("GEMINI_API_KEY is not configured.");
   }
 
   await mkdir(RENDER_DIR, { recursive: true });
   await ensureJingleAssets();
-  const chunkDir = path.join(RENDER_DIR, job.externalJobId);
+  await saveStoredJob(RENDER_DIR, job);
+
+  const chunkDir = jobChunkDir(RENDER_DIR, job.externalJobId);
   await mkdir(chunkDir, { recursive: true });
-  const rawPath = path.join(RENDER_DIR, `${job.externalJobId}.pcm`);
-  const openingPath = path.join(chunkDir, "opening.pcm");
-  const closingPath = path.join(chunkDir, "closing.pcm");
-  const outputPath = path.join(RENDER_DIR, `${job.externalJobId}.mp3`);
-  const chunks = splitScript(body.script);
-  const pcmChunks: Buffer[] = [];
+  job.status = "running";
 
-  async function loadOrGenerateChunk(fileName: string, label: string, text: string): Promise<Buffer> {
-    const chunkPath = path.join(chunkDir, fileName);
-    if (existsSync(chunkPath)) {
-      return readFile(chunkPath);
+  for (const chunk of job.chunks) {
+    const chunkPath = path.join(chunkDir, chunk.fileName);
+    if (!existsSync(chunkPath)) {
+      const pcm = await generateGeminiPcm(job.model, job.voice, chunk.text, chunk.label);
+      await writeChunkPcm(RENDER_DIR, job.externalJobId, chunk, pcm);
     }
-    const pcm = await generateGeminiPcm(job.model, job.voice, text, label);
-    await writeFile(chunkPath, pcm);
-    return pcm;
   }
 
-  const openingPcm = await loadOrGenerateChunk("opening.pcm", "opening", buildOpeningLine(body));
-  const closingPcm = await loadOrGenerateChunk("closing.pcm", "closing", buildClosingLine());
-
-  for (const [index, chunk] of chunks.entries()) {
-    pcmChunks.push(await loadOrGenerateChunk(`${index}.pcm`, `chunk-${index + 1}/${chunks.length}`, chunk));
-  }
-
-  const rawAudio = Buffer.concat(pcmChunks);
-  await writeFile(rawPath, rawAudio);
-  const durationSeconds = rawAudio.length / (24_000 * 2);
-  const safeTitle = body.title.replace(/[^\w .-]+/g, "").slice(0, 80) || "Podnarr episode";
-
-  await runFfmpeg([
-    "-i",
-    INTRO_JINGLE_PATH,
-    "-f",
-    "s16le",
-    "-ar",
-    "24000",
-    "-ac",
-    "1",
-    "-i",
-    openingPath,
-    "-f",
-    "s16le",
-    "-ar",
-    "24000",
-    "-ac",
-    "1",
-    "-i",
-    rawPath,
-    "-f",
-    "s16le",
-    "-ar",
-    "24000",
-    "-ac",
-    "1",
-    "-i",
-    closingPath,
-    "-i",
-    OUTRO_JINGLE_PATH,
-    "-filter_complex",
-    `[0:a]volume=${JINGLE_VOLUME.toFixed(2)}[intro];[1:a]atempo=${tempoValue().toFixed(2)},volume=1[opening];[2:a]atempo=${tempoValue().toFixed(2)},volume=1[narr];[3:a]atempo=${tempoValue().toFixed(2)},volume=1[closing];[4:a]volume=${JINGLE_VOLUME.toFixed(2)}[outro];[intro][opening][narr][closing][outro]concat=n=5:v=0:a=1,loudnorm=I=-16:TP=-1.5:LRA=11[a]`,
-    "-map",
-    "[a]",
-    "-metadata",
-    `title=${safeTitle}`,
-    "-codec:a",
-    "libmp3lame",
-    "-b:a",
-    "128k",
+  const outputPath = path.join(RENDER_DIR, `${job.externalJobId}.mp3`);
+  const assembled = await assembleEpisodeMp3({
+    body: job.body,
+    chunkDir,
+    chunks: job.chunks,
+    introJinglePath: INTRO_JINGLE_PATH,
+    outroJinglePath: OUTRO_JINGLE_PATH,
     outputPath
-  ]);
+  });
 
-  // Ensure ffmpeg finished writing a non-empty file before reporting success.
-  await readFile(outputPath);
   job.audioPath = outputPath;
-  const spokenBumperSeconds = (openingPcm.length + closingPcm.length) / (24_000 * 2);
-  job.durationSeconds = Math.round((durationSeconds + spokenBumperSeconds) / tempoValue() + 8);
+  job.durationSeconds = assembled.durationSeconds;
   job.status = "succeeded";
+  job.error = null;
+  await saveStoredJob(RENDER_DIR, job);
 }
 
-async function renderMockPodcast(job: JobRecord, body: NarrationRequest): Promise<void> {
+async function renderGeminiBatch(job: StoredJobRecord): Promise<void> {
+  if (!GEMINI_API_KEY) {
+    throw new Error("GEMINI_API_KEY is not configured.");
+  }
+
+  await mkdir(RENDER_DIR, { recursive: true });
+  await ensureJingleAssets();
+  await saveStoredJob(RENDER_DIR, job);
+  job.status = "running";
+  await advanceGeminiBatchJob(RENDER_DIR, job, INTRO_JINGLE_PATH, OUTRO_JINGLE_PATH);
+}
+
+async function renderMockPodcast(job: StoredJobRecord): Promise<void> {
   await mkdir(RENDER_DIR, { recursive: true });
   await ensureJingleAssets();
   const outputPath = path.join(RENDER_DIR, `${job.externalJobId}.mp3`);
-  const duration = Math.min(45, Math.max(8, Math.round(estimateAudioMinutes(body.script) * 6)));
-  const safeTitle = body.title.replace(/[^\w .-]+/g, "").slice(0, 80) || "Podnarr episode";
+  const duration = Math.min(45, Math.max(8, Math.round(estimateAudioMinutes(job.body.script) * 6)));
+  const safeTitle = job.body.title.replace(/[^\w .-]+/g, "").slice(0, 80) || "Podnarr episode";
 
   await runFfmpeg([
     "-f",
@@ -452,9 +385,11 @@ async function renderMockPodcast(job: JobRecord, body: NarrationRequest): Promis
   job.audioPath = outputPath;
   job.durationSeconds = duration + 11;
   job.status = "succeeded";
+  job.error = null;
+  await saveStoredJob(RENDER_DIR, job);
 }
 
-function toJobResponse(job: JobRecord): NarrationJobResponse {
+function toJobResponse(job: StoredJobRecord): NarrationJobResponse {
   return {
     provider: job.provider,
     model: job.model,
@@ -466,7 +401,7 @@ function toJobResponse(job: JobRecord): NarrationJobResponse {
   };
 }
 
-function toPollResponse(job: JobRecord): NarrationPollResponse {
+function toPollResponse(job: StoredJobRecord): NarrationPollResponse {
   return {
     ...toJobResponse(job),
     audioUrl: job.audioPath ? `${PUBLIC_BASE_URL}/v1/narrations/${job.externalJobId}/audio` : null,
@@ -476,9 +411,24 @@ function toPollResponse(job: JobRecord): NarrationPollResponse {
   };
 }
 
+async function restorePersistedJobs(): Promise<void> {
+  await mkdir(RENDER_DIR, { recursive: true });
+  const entries = await readdir(RENDER_DIR, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const stored = await loadStoredJob(RENDER_DIR, entry.name);
+    if (stored && stored.status === "running") {
+      jobs.set(stored.externalJobId, stored);
+    }
+  }
+}
+
 app.get("/health", async () => ({
   status: "ok",
-  renderer: ENABLE_MOCK_RENDERER ? "mock-ffmpeg" : `gemini-${GEMINI_TTS_MODE}`,
+  renderer: ENABLE_MOCK_RENDERER ? "mock-ffmpeg" : DEFAULT_TTS_CONFIG.provider,
   default_provider: DEFAULT_TTS_CONFIG.provider,
   public_base_url: PUBLIC_BASE_URL
 }));
@@ -511,30 +461,35 @@ app.post<{ Body: NarrationRequest }>("/v1/narrations", async (request, reply) =>
   const model = body.model ?? DEFAULT_TTS_CONFIG.model;
   const voice = body.voice ?? DEFAULT_TTS_CONFIG.voice;
   const estimatedAudioMinutes = estimateAudioMinutes(body.script);
-  const job: JobRecord = {
+  const job = createStoredJob({
     provider,
     model,
     voice,
     externalJobId: crypto.randomUUID(),
-    status: "queued",
+    postId: body.postId,
     estimatedAudioMinutes,
     estimatedCostUsd: estimatedAudioMinutes * costPerMinute(provider, model),
-    audioPath: null,
-    durationSeconds: null,
-    error: null
-  };
+    body,
+    sitePlug: SITE_PLUG
+  });
   jobs.set(job.externalJobId, job);
 
-  job.status = "running";
-  const renderer = ENABLE_MOCK_RENDERER || !GEMINI_API_KEY ? renderMockPodcast : renderGeminiStandard;
-  renderer(job, body).catch((error: unknown) => {
-      job.status = "failed";
-      job.error = error instanceof Error ? error.message : String(error);
-      void alertDiscord(
-        "Podnarr audio render failed",
-        `postId=${body.postId}\nexternalJobId=${job.externalJobId}\nvoice=${job.voice}\nmodel=${job.model}\n${job.error}`
-      );
-    });
+  const renderer =
+    ENABLE_MOCK_RENDERER || !GEMINI_API_KEY
+      ? renderMockPodcast
+      : provider === "gemini_batch"
+        ? renderGeminiBatch
+        : renderGeminiStandard;
+
+  renderer(job).catch((error: unknown) => {
+    job.status = "failed";
+    job.error = error instanceof Error ? error.message : String(error);
+    void saveStoredJob(RENDER_DIR, job);
+    void alertDiscord(
+      "Podnarr audio render failed",
+      `postId=${body.postId}\nexternalJobId=${job.externalJobId}\nvoice=${job.voice}\nmodel=${job.model}\nprovider=${job.provider}\n${job.error}`
+    );
+  });
 
   return reply.send(toJobResponse(job));
 });
@@ -543,12 +498,28 @@ app.get<{ Params: { id: string } }>("/v1/narrations/:id", async (request, reply)
   if (!isAuthorized(request.headers.authorization)) {
     return reply.status(401).send({ error: "Unauthorized" });
   }
-  const job = jobs.get(request.params.id);
-  return job ? reply.send(toPollResponse(job)) : reply.status(404).send({ error: "Not found" });
+
+  const job = await getJob(request.params.id);
+  if (!job) {
+    return reply.status(404).send({ error: "Not found" });
+  }
+
+  if (job.provider === "gemini_batch" && job.status === "running") {
+    try {
+      await advanceGeminiBatchJob(RENDER_DIR, job, INTRO_JINGLE_PATH, OUTRO_JINGLE_PATH);
+      jobs.set(job.externalJobId, job);
+    } catch (error) {
+      job.status = "failed";
+      job.error = error instanceof Error ? error.message : String(error);
+      await saveStoredJob(RENDER_DIR, job);
+    }
+  }
+
+  return reply.send(toPollResponse(job));
 });
 
 app.get<{ Params: { id: string } }>("/v1/narrations/:id/audio", async (request, reply) => {
-  const job = jobs.get(request.params.id);
+  const job = await getJob(request.params.id);
   if (!job?.audioPath || !existsSync(job.audioPath)) {
     return reply.status(404).send({ error: "Not found" });
   }
@@ -558,4 +529,5 @@ app.get<{ Params: { id: string } }>("/v1/narrations/:id/audio", async (request, 
   return reply.send(createReadStream(job.audioPath));
 });
 
+await restorePersistedJobs();
 await app.listen({ port: PORT, host: "0.0.0.0" });

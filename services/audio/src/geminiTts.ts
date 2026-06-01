@@ -21,13 +21,6 @@ function geminiErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function isTransientGeminiError(error: unknown): boolean {
-  const message = geminiErrorMessage(error);
-  return /internal error|temporar|timeout|rate limit|quota|429|500|502|503|504|did not include inline audio|fetch failed|econnreset|socket hang up|network/i.test(
-    message
-  );
-}
-
 function parseAudioResponse(payload: unknown): Buffer {
   const root = payload as {
     candidates?: Array<{
@@ -47,6 +40,39 @@ function parseAudioResponse(payload: unknown): Buffer {
   return Buffer.from(data, "base64");
 }
 
+export function buildTtsGenerateContentRequest(text: string, voice: string): Record<string, unknown> {
+  return {
+    contents: [
+      {
+        parts: [
+          {
+            text: `${NARRATION_STYLE_PROMPT}\n\n${text}`
+          }
+        ]
+      }
+    ],
+    generationConfig: {
+      responseModalities: ["AUDIO"],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: {
+            voiceName: voice
+          }
+        }
+      }
+    }
+  };
+}
+
+export { parseAudioResponse };
+
+export function isTransientGeminiError(error: unknown): boolean {
+  const message = geminiErrorMessage(error);
+  return /internal error|temporar|timeout|rate limit|quota|429|500|502|503|504|did not include inline audio|fetch failed|econnreset|socket hang up|network/i.test(
+    message
+  );
+}
+
 async function generateGeminiPcmOnce(model: string, voice: string, text: string): Promise<Buffer> {
   if (!GEMINI_API_KEY) {
     throw new Error("GEMINI_API_KEY is not configured.");
@@ -63,27 +89,7 @@ async function generateGeminiPcmOnce(model: string, voice: string, text: string)
             "content-type": "application/json",
             "x-goog-api-key": GEMINI_API_KEY
           },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  {
-                    text: `${NARRATION_STYLE_PROMPT}\n\n${text}`
-                  }
-                ]
-              }
-            ],
-            generationConfig: {
-              responseModalities: ["AUDIO"],
-              speechConfig: {
-                voiceConfig: {
-                  prebuiltVoiceConfig: {
-                    voiceName: voice
-                  }
-                }
-              }
-            }
-          })
+          body: JSON.stringify(buildTtsGenerateContentRequest(text, voice))
         }
       );
 
