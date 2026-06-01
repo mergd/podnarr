@@ -1,5 +1,6 @@
 {
   "name": "podnarr-api",
+  "account_id": "24d3bab86b3b44170195747d8f330d4e",
   "main": "src/index.ts",
   "compatibility_date": "2026-05-09",
   "workers_dev": true,
