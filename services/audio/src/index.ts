@@ -15,6 +15,8 @@ import type {
 } from "@podnarr/shared/tts";
 import { DEFAULT_TTS_CONFIG } from "@podnarr/shared/tts";
 
+import { generateGeminiPcm, splitScript } from "./geminiTts.js";
+
 const PORT = Number(process.env.PORT) || 8000;
 const SERVICE_TOKEN = process.env.AUDIO_SERVICE_TOKEN ?? "";
 const PUBLIC_BASE_URL = process.env.PUBLIC_AUDIO_SERVICE_URL ?? `http://localhost:${PORT}`;
@@ -26,12 +28,8 @@ const GEMINI_TTS_MODE = process.env.GEMINI_TTS_MODE ?? "auto";
 const GEMINI_API_VERSION = process.env.GEMINI_API_VERSION ?? "v1beta";
 const GEMINI_SCRIPT_MODEL = process.env.GEMINI_SCRIPT_MODEL ?? "gemini-3-flash-preview";
 const SITE_PLUG = process.env.PODNARR_SITE_URL ?? "podnarr.yet-to-be.com";
-const NARRATION_STYLE_PROMPT =
-  process.env.NARRATION_STYLE_PROMPT ??
-  "Read this as an American male podcast host with a dry, deadpan, slightly dramatic delivery: calm, serious, precise, and restrained. Keep the cadence brisk and conversational. Use natural, brief pauses around quotations and section transitions. Avoid cheerfulness, sales energy, theatricality, exaggerated intonation, and long pauses.";
 const NARRATION_TEMPO = Number(process.env.NARRATION_TEMPO) || 1.16;
 const JINGLE_VOLUME = Number(process.env.JINGLE_VOLUME) || 1.6;
-const GEMINI_CHUNK_RETRIES = Number(process.env.GEMINI_CHUNK_RETRIES) || 3;
 const JINGLE_DIR = path.join(RENDER_DIR, "assets");
 const INTRO_JINGLE_PATH = path.join(JINGLE_DIR, "intro-jingle-v7.mp3");
 const OUTRO_JINGLE_PATH = path.join(JINGLE_DIR, "outro-jingle-v7.mp3");
@@ -99,15 +97,6 @@ function runFfmpeg(args: string[]): Promise<void> {
 
 function tempoValue(): number {
   return Math.min(1.35, Math.max(0.8, NARRATION_TEMPO));
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isTransientGeminiError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /internal error|temporar|timeout|rate limit|quota|429|500|502|503|504|did not include inline audio/i.test(message);
 }
 
 function parseTextResponse(payload: unknown): string {
@@ -343,126 +332,6 @@ async function ensureJingleAssets(): Promise<void> {
   }
 }
 
-function splitScript(script: string, maxBytes = 1200): string[] {
-  const paragraphs = script.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
-  const chunks: string[] = [];
-  let current = "";
-
-  for (const paragraph of paragraphs) {
-    const candidate = current ? `${current}\n\n${paragraph}` : paragraph;
-    if (Buffer.byteLength(candidate, "utf8") <= maxBytes) {
-      current = candidate;
-      continue;
-    }
-
-    if (current) {
-      chunks.push(current);
-      current = "";
-    }
-
-    if (Buffer.byteLength(paragraph, "utf8") <= maxBytes) {
-      current = paragraph;
-      continue;
-    }
-
-    const sentences = paragraph.match(/[^.!?]+[.!?]+|\S+/g) ?? [paragraph];
-    for (const sentence of sentences) {
-      const next = current ? `${current} ${sentence.trim()}` : sentence.trim();
-      if (Buffer.byteLength(next, "utf8") > maxBytes && current) {
-        chunks.push(current);
-        current = sentence.trim();
-      } else {
-        current = next;
-      }
-    }
-  }
-
-  if (current) {
-    chunks.push(current);
-  }
-
-  return chunks.length > 0 ? chunks : [script.slice(0, maxBytes)];
-}
-
-function parseAudioResponse(payload: unknown): Buffer {
-  const root = payload as {
-    candidates?: Array<{
-      content?: { parts?: Array<{ inlineData?: { data?: string; mimeType?: string }; text?: string }> };
-      finishReason?: string;
-    }>;
-  };
-  const data = root.candidates?.[0]?.content?.parts?.find((part) => part.inlineData?.data)?.inlineData?.data;
-  if (!data) {
-    const finishReason = root.candidates?.[0]?.finishReason;
-    const text = root.candidates?.[0]?.content?.parts?.find((part) => part.text)?.text;
-    const detail = [finishReason ? `finishReason=${finishReason}` : null, text ? `text=${text.slice(0, 160)}` : null]
-      .filter(Boolean)
-      .join("; ");
-    throw new Error(`Gemini response did not include inline audio data${detail ? ` (${detail})` : ""}.`);
-  }
-  return Buffer.from(data, "base64");
-}
-
-async function generateGeminiPcmOnce(model: string, voice: string, text: string): Promise<Buffer> {
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/${GEMINI_API_VERSION}/models/${encodeURIComponent(model)}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-goog-api-key": GEMINI_API_KEY
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: `${NARRATION_STYLE_PROMPT}\n\n${text}`
-              }
-            ]
-          }
-        ],
-        generationConfig: {
-          responseModalities: ["AUDIO"],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: {
-                voiceName: voice
-              }
-            }
-          }
-        }
-      })
-    }
-  );
-
-  const payload = (await response.json()) as unknown;
-  if (!response.ok) {
-    const error = payload as { error?: { message?: string } };
-    throw new Error(error.error?.message ?? `Gemini TTS failed with ${response.status}`);
-  }
-
-  return parseAudioResponse(payload);
-}
-
-async function generateGeminiPcm(model: string, voice: string, text: string): Promise<Buffer> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt <= GEMINI_CHUNK_RETRIES; attempt += 1) {
-    try {
-      return await generateGeminiPcmOnce(model, voice, text);
-    } catch (error) {
-      lastError = error;
-      if (attempt >= GEMINI_CHUNK_RETRIES || !isTransientGeminiError(error)) {
-        break;
-      }
-      await sleep(750 * 2 ** attempt + Math.floor(Math.random() * 250));
-    }
-  }
-
-  const message = lastError instanceof Error ? lastError.message : String(lastError);
-  throw new Error(`Gemini TTS chunk failed after ${GEMINI_CHUNK_RETRIES + 1} attempts: ${message}`);
-}
-
 async function renderGeminiStandard(job: JobRecord, body: NarrationRequest): Promise<void> {
   if (!GEMINI_API_KEY) {
     throw new Error("GEMINI_API_KEY is not configured.");
@@ -470,20 +339,30 @@ async function renderGeminiStandard(job: JobRecord, body: NarrationRequest): Pro
 
   await mkdir(RENDER_DIR, { recursive: true });
   await ensureJingleAssets();
+  const chunkDir = path.join(RENDER_DIR, job.externalJobId);
+  await mkdir(chunkDir, { recursive: true });
   const rawPath = path.join(RENDER_DIR, `${job.externalJobId}.pcm`);
-  const openingPath = path.join(RENDER_DIR, `${job.externalJobId}-opening.pcm`);
-  const closingPath = path.join(RENDER_DIR, `${job.externalJobId}-closing.pcm`);
+  const openingPath = path.join(chunkDir, "opening.pcm");
+  const closingPath = path.join(chunkDir, "closing.pcm");
   const outputPath = path.join(RENDER_DIR, `${job.externalJobId}.mp3`);
   const chunks = splitScript(body.script);
   const pcmChunks: Buffer[] = [];
 
-  const openingPcm = await generateGeminiPcm(job.model, job.voice, buildOpeningLine(body));
-  const closingPcm = await generateGeminiPcm(job.model, job.voice, buildClosingLine());
-  await writeFile(openingPath, openingPcm);
-  await writeFile(closingPath, closingPcm);
+  async function loadOrGenerateChunk(fileName: string, label: string, text: string): Promise<Buffer> {
+    const chunkPath = path.join(chunkDir, fileName);
+    if (existsSync(chunkPath)) {
+      return readFile(chunkPath);
+    }
+    const pcm = await generateGeminiPcm(job.model, job.voice, text, label);
+    await writeFile(chunkPath, pcm);
+    return pcm;
+  }
 
-  for (const chunk of chunks) {
-    pcmChunks.push(await generateGeminiPcm(job.model, job.voice, chunk));
+  const openingPcm = await loadOrGenerateChunk("opening.pcm", "opening", buildOpeningLine(body));
+  const closingPcm = await loadOrGenerateChunk("closing.pcm", "closing", buildClosingLine());
+
+  for (const [index, chunk] of chunks.entries()) {
+    pcmChunks.push(await loadOrGenerateChunk(`${index}.pcm`, `chunk-${index + 1}/${chunks.length}`, chunk));
   }
 
   const rawAudio = Buffer.concat(pcmChunks);

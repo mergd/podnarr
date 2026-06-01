@@ -23,6 +23,44 @@ export const DEFAULT_TTS_CONFIG: TtsProviderConfig = {
   estimatedCostPerAudioMinuteUsd: 0.03
 };
 
+export const GEMINI_TTS_MODEL_OPTIONS: Array<TtsProviderConfig & { note: string }> = [
+  {
+    provider: "gemini_standard",
+    model: "gemini-3.1-flash-tts-preview",
+    voice: "Orus",
+    estimatedCostPerAudioMinuteUsd: 0.03,
+    note: "Default. Most expressive/controllable; best quality for podcast narration."
+  },
+  {
+    provider: "gemini_standard",
+    model: "gemini-2.5-flash-preview-tts",
+    voice: "Orus",
+    estimatedCostPerAudioMinuteUsd: 0.015,
+    note: "Cheaper fallback when cost or long-job stability matters more than expressiveness."
+  },
+  {
+    provider: "gemini_standard",
+    model: "gemini-2.5-pro-preview-tts",
+    voice: "Orus",
+    estimatedCostPerAudioMinuteUsd: 0.025,
+    note: "Higher-quality 2.5 tier when flash preview sounds too thin."
+  },
+  {
+    provider: "gemini_batch",
+    model: "gemini-3.1-flash-tts-preview",
+    voice: "Orus",
+    estimatedCostPerAudioMinuteUsd: 0.015,
+    note: "Async batch path when implemented. Lower cost, slow turnaround."
+  },
+  {
+    provider: "openai",
+    model: "gpt-4o-mini-tts",
+    voice: "cedar",
+    estimatedCostPerAudioMinuteUsd: 0.015,
+    note: "Non-Gemini fallback candidate once wired in the audio service."
+  }
+];
+
 export const TTS_BAKEOFF_CONFIGS: TtsProviderConfig[] = [
   DEFAULT_TTS_CONFIG,
   {
