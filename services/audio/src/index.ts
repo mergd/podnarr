@@ -17,6 +17,7 @@ import { DEFAULT_TTS_CONFIG } from "@podnarr/shared/tts";
 
 import { assembleEpisodeMp3 } from "./episodeAssembly.js";
 import { advanceGeminiBatchJob, createStoredJob, hydrateStoredJob } from "./geminiBatchRender.js";
+import { getGeminiUsageSnapshot, geminiJson, isGeminiDailyBudgetExhausted } from "./geminiClient.js";
 import { generateGeminiPcm } from "./geminiTts.js";
 import {
   jobChunkDir,
@@ -33,7 +34,6 @@ const RENDER_DIR = process.env.RENDER_DIR ?? path.join(tmpdir(), "podnarr-audio"
 const ENABLE_MOCK_RENDERER = process.env.ENABLE_MOCK_RENDERER !== "false";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL ?? "";
-const GEMINI_API_VERSION = process.env.GEMINI_API_VERSION ?? "v1beta";
 const GEMINI_SCRIPT_MODEL = process.env.GEMINI_SCRIPT_MODEL ?? "gemini-3-flash-preview";
 const SITE_PLUG = process.env.PODNARR_SITE_URL ?? "podnarr.yet-to-be.com";
 const JINGLE_DIR = path.join(RENDER_DIR, "assets");
@@ -106,41 +106,29 @@ async function describeImage(src: string): Promise<string | null> {
     }
     const mimeType = image.headers.get("content-type")?.split(";")[0] || "image/jpeg";
     const data = Buffer.from(await image.arrayBuffer()).toString("base64");
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/${GEMINI_API_VERSION}/models/${encodeURIComponent(GEMINI_SCRIPT_MODEL)}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-goog-api-key": GEMINI_API_KEY
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  text:
-                    [
-                      "You are describing the actual pixels of an article image for a podcast listener.",
-                      "Return one concise spoken sentence that says what the image, chart, table, or screenshot visibly contains.",
-                      "If it is a chart, mention the visible axes, labels, trend, or comparison when legible.",
-                      "Do not say 'Visual:', 'image appears here', 'an image is shown', or any placeholder wording.",
-                      "Do not mention alt text, filenames, URLs, or uncertainty unless the image is unreadable.",
-                      "Start with natural spoken phrasing such as 'The image shows...' or 'The chart shows...'."
-                    ].join(" ")
-                },
-                { inlineData: { mimeType, data } }
-              ]
-            }
-          ]
-        })
-      }
-    );
-    const payload = (await response.json()) as unknown;
-    if (!response.ok) {
-      const error = payload as { error?: { message?: string } };
-      throw new Error(error.error?.message ?? `image description failed with ${response.status}`);
-    }
+    const payload = await geminiJson<unknown>(`models/${encodeURIComponent(GEMINI_SCRIPT_MODEL)}:generateContent`, {
+      method: "POST",
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                text:
+                  [
+                    "You are describing the actual pixels of an article image for a podcast listener.",
+                    "Return one concise spoken sentence that says what the image, chart, table, or screenshot visibly contains.",
+                    "If it is a chart, mention the visible axes, labels, trend, or comparison when legible.",
+                    "Do not say 'Visual:', 'image appears here', 'an image is shown', or any placeholder wording.",
+                    "Do not mention alt text, filenames, URLs, or uncertainty unless the image is unreadable.",
+                    "Start with natural spoken phrasing such as 'The image shows...' or 'The chart shows...'."
+                  ].join(" ")
+              },
+              { inlineData: { mimeType, data } }
+            ]
+          }
+        ]
+      })
+    });
     const description = parseTextResponse(payload)?.replace(/^Visual:\s*/i, "").trim();
     if (!description || GENERIC_IMAGE_DESCRIPTIONS.some((pattern) => pattern.test(description))) {
       app.log.warn({ src, description }, "Image description was generic");
@@ -303,6 +291,17 @@ async function getJob(externalJobId: string): Promise<StoredJobRecord | null> {
   return stored;
 }
 
+async function deferJobOnDailyBudget(job: StoredJobRecord, error: unknown): Promise<boolean> {
+  if (!isGeminiDailyBudgetExhausted(error)) {
+    return false;
+  }
+
+  job.status = "running";
+  job.error = null;
+  await saveStoredJob(RENDER_DIR, job);
+  return true;
+}
+
 async function renderGeminiStandard(job: StoredJobRecord): Promise<void> {
   if (!GEMINI_API_KEY) {
     throw new Error("GEMINI_API_KEY is not configured.");
@@ -316,12 +315,19 @@ async function renderGeminiStandard(job: StoredJobRecord): Promise<void> {
   await mkdir(chunkDir, { recursive: true });
   job.status = "running";
 
-  for (const chunk of job.chunks) {
-    const chunkPath = path.join(chunkDir, chunk.fileName);
-    if (!existsSync(chunkPath)) {
-      const pcm = await generateGeminiPcm(job.model, job.voice, chunk.text, chunk.label);
-      await writeChunkPcm(RENDER_DIR, job.externalJobId, chunk, pcm);
+  try {
+    for (const chunk of job.chunks) {
+      const chunkPath = path.join(chunkDir, chunk.fileName);
+      if (!existsSync(chunkPath)) {
+        const pcm = await generateGeminiPcm(job.model, job.voice, chunk.text, chunk.label);
+        await writeChunkPcm(RENDER_DIR, job.externalJobId, chunk, pcm);
+      }
     }
+  } catch (error) {
+    if (await deferJobOnDailyBudget(job, error)) {
+      return;
+    }
+    throw error;
   }
 
   const outputPath = path.join(RENDER_DIR, `${job.externalJobId}.mp3`);
@@ -350,7 +356,14 @@ async function renderGeminiBatch(job: StoredJobRecord): Promise<void> {
   await ensureJingleAssets();
   await saveStoredJob(RENDER_DIR, job);
   job.status = "running";
-  await advanceGeminiBatchJob(RENDER_DIR, job, INTRO_JINGLE_PATH, OUTRO_JINGLE_PATH);
+  try {
+    await advanceGeminiBatchJob(RENDER_DIR, job, INTRO_JINGLE_PATH, OUTRO_JINGLE_PATH);
+  } catch (error) {
+    if (await deferJobOnDailyBudget(job, error)) {
+      return;
+    }
+    throw error;
+  }
 }
 
 async function renderMockPodcast(job: StoredJobRecord): Promise<void> {
@@ -430,7 +443,8 @@ app.get("/health", async () => ({
   status: "ok",
   renderer: ENABLE_MOCK_RENDERER ? "mock-ffmpeg" : DEFAULT_TTS_CONFIG.provider,
   default_provider: DEFAULT_TTS_CONFIG.provider,
-  public_base_url: PUBLIC_BASE_URL
+  public_base_url: PUBLIC_BASE_URL,
+  gemini: await getGeminiUsageSnapshot()
 }));
 
 app.post<{ Body: PrepareScriptRequest }>("/v1/scripts/prepare", async (request, reply) => {
@@ -481,7 +495,10 @@ app.post<{ Body: NarrationRequest }>("/v1/narrations", async (request, reply) =>
         ? renderGeminiBatch
         : renderGeminiStandard;
 
-  renderer(job).catch((error: unknown) => {
+  renderer(job).catch(async (error: unknown) => {
+    if (await deferJobOnDailyBudget(job, error)) {
+      return;
+    }
     job.status = "failed";
     job.error = error instanceof Error ? error.message : String(error);
     void saveStoredJob(RENDER_DIR, job);
@@ -509,6 +526,10 @@ app.get<{ Params: { id: string } }>("/v1/narrations/:id", async (request, reply)
       await advanceGeminiBatchJob(RENDER_DIR, job, INTRO_JINGLE_PATH, OUTRO_JINGLE_PATH);
       jobs.set(job.externalJobId, job);
     } catch (error) {
+      if (await deferJobOnDailyBudget(job, error)) {
+        jobs.set(job.externalJobId, job);
+        return reply.send(toPollResponse(job));
+      }
       job.status = "failed";
       job.error = error instanceof Error ? error.message : String(error);
       await saveStoredJob(RENDER_DIR, job);

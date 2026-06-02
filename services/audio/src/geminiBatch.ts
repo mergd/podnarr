@@ -1,8 +1,6 @@
 import { buildTtsGenerateContentRequest, parseAudioResponse } from "./geminiTts.js";
+import { geminiJson } from "./geminiClient.js";
 import type { ChunkDescriptor } from "./episodePlan.js";
-
-const GEMINI_API_VERSION = process.env.GEMINI_API_VERSION ?? "v1beta";
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
 
 export type GeminiBatchState =
   | "BATCH_STATE_PENDING"
@@ -27,24 +25,6 @@ export interface GeminiBatchStatus {
   error: string | null;
   responses: Map<string, Buffer>;
   failedKeys: Map<string, string>;
-}
-
-function geminiBaseUrl(path: string): string {
-  return `https://generativelanguage.googleapis.com/${GEMINI_API_VERSION}/${path}`;
-}
-
-async function geminiFetch(path: string, init?: RequestInit): Promise<Response> {
-  if (!GEMINI_API_KEY) {
-    throw new Error("GEMINI_API_KEY is not configured.");
-  }
-
-  const headers = new Headers(init?.headers);
-  headers.set("x-goog-api-key", GEMINI_API_KEY);
-  if (init?.body && !headers.has("content-type")) {
-    headers.set("content-type", "application/json");
-  }
-
-  return fetch(geminiBaseUrl(path), { ...init, headers });
 }
 
 function isTerminalBatchState(state: string): boolean {
@@ -87,40 +67,37 @@ export async function createGeminiTtsBatchJob(
     throw new Error("Cannot create a Gemini batch job with zero chunks.");
   }
 
-  const response = await geminiFetch(`models/${encodeURIComponent(model)}:batchGenerateContent`, {
-    method: "POST",
-    body: JSON.stringify({
-      batch: {
-        displayName,
-        inputConfig: {
-          requests: {
-            requests: chunks.map((chunk) => ({
-              request: buildTtsGenerateContentRequest(chunk.text, voice),
-              metadata: { key: chunk.key }
-            }))
+  const payload = await geminiJson<{ name?: string; error?: { message?: string } }>(
+    `models/${encodeURIComponent(model)}:batchGenerateContent`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        batch: {
+          displayName,
+          inputConfig: {
+            requests: {
+              requests: chunks.map((chunk) => ({
+                request: buildTtsGenerateContentRequest(chunk.text, voice),
+                metadata: { key: chunk.key }
+              }))
+            }
           }
         }
-      }
-    })
-  });
+      })
+    },
+    { usageUnits: chunks.length }
+  );
 
-  const payload = (await response.json()) as { name?: string; error?: { message?: string } };
-  if (!response.ok || !payload.name) {
-    throw new Error(payload.error?.message ?? `Gemini batch create failed with ${response.status}`);
+  if (!payload.name) {
+    throw new Error(payload.error?.message ?? "Gemini batch create failed without a job name.");
   }
 
   return payload.name;
 }
 
 export async function getGeminiBatchStatus(batchName: string): Promise<GeminiBatchStatus> {
-  const response = await geminiFetch(batchName);
-  const payload = (await response.json()) as Record<string, unknown>;
-  if (!response.ok) {
-    const error = payload.error as { message?: string } | undefined;
-    throw new Error(error?.message ?? `Gemini batch status failed with ${response.status}`);
-  }
-
-  const metadata = payload.metadata as { state?: string } | undefined;
+  const payload = await geminiJson<Record<string, unknown>>(batchName);
+  const metadata = payload.metadata as { state?: string; error?: { message?: string } } | undefined;
   const state = metadata?.state ?? (payload.state as string | undefined) ?? "BATCH_STATE_PENDING";
   const done = Boolean(payload.done) || isTerminalBatchState(state);
   const succeeded = isSuccessfulBatchState(state);
@@ -129,7 +106,7 @@ export async function getGeminiBatchStatus(batchName: string): Promise<GeminiBat
   const error =
     typeof topLevelError === "string"
       ? topLevelError
-      : topLevelError?.message ?? (metadata as { error?: { message?: string } } | undefined)?.error?.message ?? null;
+      : topLevelError?.message ?? metadata?.error?.message ?? null;
 
   const responses = new Map<string, Buffer>();
   const failedKeys = new Map<string, string>();

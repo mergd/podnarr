@@ -1,10 +1,10 @@
-const GEMINI_API_VERSION = process.env.GEMINI_API_VERSION ?? "v1beta";
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
+import { geminiJson, isTransientGeminiError } from "./geminiClient.js";
+
 const NARRATION_STYLE_PROMPT =
   process.env.NARRATION_STYLE_PROMPT ??
   "Read this as an American male podcast host with a dry, deadpan, slightly dramatic delivery: calm, serious, precise, and restrained. Keep the cadence brisk and conversational. Use natural, brief pauses around quotations and section transitions. Avoid cheerfulness, sales energy, theatricality, exaggerated intonation, and long pauses.";
 const GEMINI_CHUNK_RETRIES = Number(process.env.GEMINI_CHUNK_RETRIES) || 5;
-const GEMINI_CHUNK_DELAY_MS = Number(process.env.GEMINI_CHUNK_DELAY_MS) || 450;
+const GEMINI_CHUNK_DELAY_MS = Number(process.env.GEMINI_CHUNK_DELAY_MS) || 0;
 const GEMINI_MIN_SPLIT_BYTES = Number(process.env.GEMINI_MIN_SPLIT_BYTES) || 240;
 
 export const GEMINI_TTS_MODELS = {
@@ -64,53 +64,15 @@ export function buildTtsGenerateContentRequest(text: string, voice: string): Rec
   };
 }
 
-export { parseAudioResponse };
-
-export function isTransientGeminiError(error: unknown): boolean {
-  const message = geminiErrorMessage(error);
-  return /internal error|temporar|timeout|rate limit|quota|429|500|502|503|504|did not include inline audio|fetch failed|econnreset|socket hang up|network/i.test(
-    message
-  );
-}
+export { isTransientGeminiError, parseAudioResponse };
 
 async function generateGeminiPcmOnce(model: string, voice: string, text: string): Promise<Buffer> {
-  if (!GEMINI_API_KEY) {
-    throw new Error("GEMINI_API_KEY is not configured.");
-  }
+  const payload = await geminiJson<unknown>(`models/${encodeURIComponent(model)}:generateContent`, {
+    method: "POST",
+    body: JSON.stringify(buildTtsGenerateContentRequest(text, voice))
+  });
 
-  let lastNetworkError: unknown;
-  for (let networkAttempt = 0; networkAttempt < 3; networkAttempt += 1) {
-    try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/${GEMINI_API_VERSION}/models/${encodeURIComponent(model)}:generateContent`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-goog-api-key": GEMINI_API_KEY
-          },
-          body: JSON.stringify(buildTtsGenerateContentRequest(text, voice))
-        }
-      );
-
-      const payload = (await response.json()) as unknown;
-      if (!response.ok) {
-        const error = payload as { error?: { message?: string } };
-        throw new Error(error.error?.message ?? `Gemini TTS failed with ${response.status}`);
-      }
-
-      return parseAudioResponse(payload);
-    } catch (error) {
-      lastNetworkError = error;
-      const message = geminiErrorMessage(error);
-      if (!/fetch failed|econnreset|socket hang up|network/i.test(message) || networkAttempt >= 2) {
-        throw error;
-      }
-      await sleep(500 * 2 ** networkAttempt);
-    }
-  }
-
-  throw lastNetworkError instanceof Error ? lastNetworkError : new Error(String(lastNetworkError));
+  return parseAudioResponse(payload);
 }
 
 function splitTextInHalf(text: string): [string, string] | null {
@@ -157,7 +119,7 @@ async function generateGeminiPcmWithRetries(
   for (let attempt = 0; attempt <= GEMINI_CHUNK_RETRIES; attempt += 1) {
     try {
       if (attempt > 0) {
-        await sleep(900 * 2 ** (attempt - 1) + Math.floor(Math.random() * 400));
+        await sleep(2_000 * 2 ** (attempt - 1) + Math.floor(Math.random() * 1_000));
       }
       return await generateGeminiPcmOnce(model, voice, text);
     } catch (error) {
