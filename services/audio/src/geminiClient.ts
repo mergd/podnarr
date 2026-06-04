@@ -187,17 +187,25 @@ export function isGeminiRateLimitError(error: unknown): boolean {
   return /429|resource_exhausted|quota exceeded|rate limit/i.test(message);
 }
 
+function isGeminiBillingOrQuotaFatal(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /spending cap|quota exceeded|exceeded your current quota|exceeded its monthly/i.test(message);
+}
+
 export function isTransientGeminiError(error: unknown): boolean {
-  if (isGeminiDailyBudgetExhausted(error)) {
+  if (isGeminiDailyBudgetExhausted(error) || isGeminiBillingOrQuotaFatal(error)) {
     return false;
   }
 
   if (error instanceof GeminiApiError) {
-    return error.status === 429 || error.status >= 500 || /resource_exhausted|quota|rate limit|internal|unavailable|timeout/i.test(error.message);
+    if (isGeminiBillingOrQuotaFatal(error)) {
+      return false;
+    }
+    return error.status >= 500 || /internal|unavailable|timeout/i.test(error.message);
   }
 
   const message = error instanceof Error ? error.message : String(error);
-  return /internal error|temporar|timeout|rate limit|quota|429|500|502|503|504|did not include inline audio|fetch failed|econnreset|socket hang up|network|resource_exhausted/i.test(
+  return /internal error|temporar|timeout|500|502|503|504|did not include inline audio|fetch failed|econnreset|socket hang up|network/i.test(
     message
   );
 }
@@ -269,7 +277,8 @@ export async function geminiFetch(pathname: string, init?: RequestInit, options?
 
     const shouldRetry =
       attempt < GEMINI_MAX_RETRIES &&
-      (response.status === 429 || response.status === 503 || response.status >= 500 || isGeminiRateLimitError(error));
+      !isGeminiBillingOrQuotaFatal(error) &&
+      (response.status === 429 || response.status === 503 || response.status >= 500);
 
     if (!shouldRetry) {
       throw error;

@@ -54,9 +54,14 @@ function verifyAdmin(request: Request, env: Env): boolean {
   return Boolean(env.ADMIN_SECRET) && request.headers.get("x-admin-secret") === env.ADMIN_SECRET;
 }
 
+function autoQueueNarration(env: Env): boolean {
+  const raw = (env.AUTO_QUEUE_NARRATION ?? "false").trim().toLowerCase();
+  return raw === "true" || raw === "1" || raw === "yes";
+}
+
 function maxPostsPerRefresh(env: Env): number {
-  const parsed = Number.parseInt(env.MAX_POSTS_PER_REFRESH ?? "3", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 3;
+  const parsed = Number.parseInt(env.MAX_POSTS_PER_REFRESH ?? "0", 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
 function brandedArtworkKey(slug: string): string {
@@ -97,14 +102,17 @@ async function refreshPublication(env: Env, slug: string, requestBaseUrl: string
   await updatePublicationFromSource(env.DB, publication, source);
   const pendingPostIds = await upsertPosts(env.DB, publication.id, source);
   await syncBrandedArtwork(env, publication, source.imageUrl);
-  const queuedIds = pendingPostIds.slice(0, maxPostsPerRefresh(env));
-  const queuedPosts = await enqueuePosts(env, publication.id, queuedIds);
+  const queueLimit = autoQueueNarration(env) ? maxPostsPerRefresh(env) : 0;
+  const queuedIds = pendingPostIds.slice(0, queueLimit);
+  const queuedPosts = queuedIds.length > 0 ? await enqueuePosts(env, publication.id, queuedIds) : 0;
   const updated = await getPublicationBySlug(env.DB, slug);
 
   return {
     publication: toPublicationSummary(updated ?? publication, requestBaseUrl),
     discoveredPosts: source.posts.length,
-    queuedPosts
+    pendingPosts: pendingPostIds.length,
+    queuedPosts,
+    autoQueueNarration: autoQueueNarration(env)
   };
 }
 

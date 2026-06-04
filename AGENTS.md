@@ -10,6 +10,7 @@ When verifying audio/TTS changes:
 - **Do not loop full-episode renders** to debug retry/batch logic; test one chunk or a tiny 2–3 chunk script.
 - **Prefer local mock rendering** — leave `ENABLE_MOCK_RENDERER` unset (defaults on) or set it explicitly when you only need pipeline/ffmpeg behavior, not real voice quality.
 - **Avoid re-running production narrations** unless the user asks; use admin generate on a single post sparingly.
+- **Auto-queue is off by default** (`AUTO_QUEUE_NARRATION=false`). Cron/refresh only ingests feeds; narration starts only via `POST /admin/posts/:id/generate`.
 - **Batch jobs are async** — polling is expected; do not hammer create/poll in tight loops.
 
 For unit-level checks, mock `fetch` or test pure helpers (`splitScript`, batch response parsing, job manifest) instead of calling Google.

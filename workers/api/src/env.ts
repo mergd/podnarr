@@ -10,4 +10,5 @@ export interface Env {
   PUBLIC_UI_BASE_URL?: string;
   PROCESSING_VERSION: string;
   MAX_POSTS_PER_REFRESH?: string;
+  AUTO_QUEUE_NARRATION?: string;
 }
