@@ -39,8 +39,8 @@
     "PUBLIC_UI_BASE_URL": "https://podnarr.yet-to-be.com",
     "APP_BASE_URL": "https://podnarr.yet-to-be.com",
     "PROCESSING_VERSION": "v1",
-    "MAX_POSTS_PER_REFRESH": "0",
-    "AUTO_QUEUE_NARRATION": "false"
+    "MAX_POSTS_PER_REFRESH": "1",
+    "AUTO_QUEUE_NARRATION": "true"
   },
   "triggers": {
     "crons": ["0 * * * *"]

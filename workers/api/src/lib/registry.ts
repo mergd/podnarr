@@ -239,8 +239,25 @@ export async function getPublicationBrandedArtworkKey(db: D1Database, slug: stri
   return row?.branded_image_key ?? null;
 }
 
+interface QueueCandidate {
+  id: number;
+  pubDateMs: number;
+}
+
+async function hasQueuedGenerateJob(db: D1Database, postId: number): Promise<boolean> {
+  const job = await db
+    .prepare(
+      `SELECT id FROM jobs
+      WHERE post_id = ?1 AND kind = 'post.generate' AND status = 'queued'
+      LIMIT 1`
+    )
+    .bind(postId)
+    .first<{ id: string }>();
+  return Boolean(job);
+}
+
 export async function upsertPosts(db: D1Database, publicationId: number, source: SourcePublication): Promise<number[]> {
-  const insertedOrPendingIds: number[] = [];
+  const queueCandidates: QueueCandidate[] = [];
   for (const post of source.posts) {
     const skip = shouldSkipPost(post);
     await db
@@ -291,15 +308,18 @@ export async function upsertPosts(db: D1Database, publicationId: number, source:
       .run();
 
     const row = await db
-      .prepare("SELECT id, status FROM posts WHERE publication_id = ?1 AND post_key = ?2")
+      .prepare("SELECT id, status, pub_date_ms FROM posts WHERE publication_id = ?1 AND post_key = ?2")
       .bind(publicationId, post.postKey)
-      .first<{ id: number; status: string }>();
-    if (row && !skip.shouldSkip && (row.status === "pending" || row.status === "failed")) {
-      insertedOrPendingIds.push(row.id);
+      .first<{ id: number; status: string; pub_date_ms: number | null }>();
+    if (row && !skip.shouldSkip && row.status === "pending" && !(await hasQueuedGenerateJob(db, row.id))) {
+      queueCandidates.push({
+        id: row.id,
+        pubDateMs: row.pub_date_ms ?? post.pubDateMs ?? 0
+      });
     }
   }
 
-  return insertedOrPendingIds;
+  return queueCandidates.sort((left, right) => right.pubDateMs - left.pubDateMs).map((candidate) => candidate.id);
 }
 
 export async function enqueuePosts(env: Env, publicationId: number, postIds: number[]): Promise<number> {

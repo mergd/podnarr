@@ -39,16 +39,34 @@ function isFailedBatchState(state: string): boolean {
   return /(?:BATCH|JOB)_STATE_(?:FAILED|CANCELLED|EXPIRED)$/.test(state);
 }
 
-function readInlineResponses(payload: Record<string, unknown>): Array<{ key: string; response?: unknown; error?: unknown }> {
-  const response = payload.response as Record<string, unknown> | undefined;
-  const dest = payload.dest as Record<string, unknown> | undefined;
-  const inlineResponses = (response?.inlinedResponses ?? dest?.inlinedResponses) as
-    | Array<{ metadata?: { key?: string }; response?: unknown; error?: unknown }>
-    | undefined;
+interface InlinedBatchEntry {
+  metadata?: { key?: string };
+  response?: unknown;
+  error?: unknown;
+}
 
-  if (!inlineResponses) {
-    return [];
+function unwrapInlinedResponseList(value: unknown): InlinedBatchEntry[] {
+  if (Array.isArray(value)) {
+    return value;
   }
+
+  if (value && typeof value === "object") {
+    const nested = (value as { inlinedResponses?: unknown }).inlinedResponses;
+    if (Array.isArray(nested)) {
+      return nested;
+    }
+  }
+
+  return [];
+}
+
+function readInlineResponses(payload: Record<string, unknown>): Array<{ key: string; response?: unknown; error?: unknown }> {
+  const batch = (payload.response ?? payload) as Record<string, unknown>;
+  const output = batch.output as Record<string, unknown> | undefined;
+  const dest = payload.dest as Record<string, unknown> | undefined;
+  const inlineResponses = unwrapInlinedResponseList(
+    output?.inlinedResponses ?? batch.inlinedResponses ?? dest?.inlinedResponses
+  );
 
   return inlineResponses.map((entry, index) => ({
     key: entry.metadata?.key ?? String(index),
