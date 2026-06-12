@@ -1,5 +1,5 @@
 import { createReadStream, existsSync } from "node:fs";
-import { mkdir, readFile, readdir, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -38,7 +38,15 @@ const GEMINI_SCRIPT_MODEL = process.env.GEMINI_SCRIPT_MODEL ?? "gemini-3-flash-p
 const SITE_PLUG = process.env.PODNARR_SITE_URL ?? "podnarr.yet-to-be.com";
 const JINGLE_DIR = path.join(RENDER_DIR, "assets");
 const INTRO_JINGLE_PATH = path.join(JINGLE_DIR, "intro-jingle-v7.mp3");
-const OUTRO_JINGLE_PATH = path.join(JINGLE_DIR, "outro-jingle-v7.mp3");
+const OUTRO_JINGLE_PATH = path.join(JINGLE_DIR, "outro-jingle-broadcast-sparkle-v1.mp3");
+const OUTRO_CHIME_SAMPLE_RATE = 44_100;
+const OUTRO_CHIME_EVENTS = [
+  { frequency: 293.66, start: 0, length: 1.15, amplitude: 0.17, decay: 0.7, release: 0.34, harmonics: [1, 0.22, 0.08] },
+  { frequency: 440, start: 0.22, length: 1.12, amplitude: 0.15, decay: 0.68, release: 0.32, harmonics: [1, 0.2, 0.07] },
+  { frequency: 587.33, start: 0.48, length: 1.15, amplitude: 0.17, decay: 0.74, release: 0.36, harmonics: [1, 0.17, 0.05] },
+  { frequency: 880, start: 0.84, length: 1.7, amplitude: 0.11, decay: 0.95, release: 0.52, harmonics: [1, 0.1, 0.03] },
+  { frequency: 146.83, start: 0, length: 2.7, amplitude: 0.08, attack: 0.06, decay: 1.35, release: 0.55, harmonics: [1, 0.16] }
+] as const;
 const GENERIC_IMAGE_DESCRIPTIONS = [
   /image appears here/i,
   /there is an image/i,
@@ -91,6 +99,112 @@ function runFfmpeg(args: string[]): Promise<void> {
 function parseTextResponse(payload: unknown): string {
   const root = payload as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
   return root.candidates?.[0]?.content?.parts?.map((part) => part.text).filter(Boolean).join("").trim() ?? "";
+}
+
+function chimeEnvelope(
+  time: number,
+  start: number,
+  attack: number,
+  decay: number,
+  sustain: number,
+  release: number,
+  length: number
+): number {
+  const localTime = time - start;
+  if (localTime < 0 || localTime > length) {
+    return 0;
+  }
+  if (localTime < attack) {
+    return localTime / Math.max(attack, 0.001);
+  }
+  if (localTime < length - release) {
+    return sustain + (1 - sustain) * Math.exp(-(localTime - attack) / Math.max(decay, 0.001));
+  }
+  const tailStart = Math.max(attack, length - release);
+  const tailLevel = sustain + (1 - sustain) * Math.exp(-(tailStart - attack) / Math.max(decay, 0.001));
+  return tailLevel * Math.max(0, 1 - (localTime - tailStart) / Math.max(release, 0.001));
+}
+
+function chimeTone(
+  time: number,
+  event: {
+    frequency: number;
+    start: number;
+    length: number;
+    amplitude: number;
+    attack?: number;
+    decay: number;
+    sustain?: number;
+    release: number;
+    harmonics: readonly number[];
+  }
+): number {
+  const attack = event.attack ?? 0.012;
+  const sustain = event.sustain ?? 0;
+  const envelope = chimeEnvelope(time, event.start, attack, event.decay, sustain, event.release, event.length);
+  if (envelope <= 0) {
+    return 0;
+  }
+
+  const localTime = time - event.start;
+  const harmonicValue = event.harmonics.reduce(
+    (sum, weight, index) => sum + weight * Math.sin(2 * Math.PI * event.frequency * (index + 1) * localTime),
+    0
+  );
+  return event.amplitude * envelope * harmonicValue;
+}
+
+function softClip(sample: number): number {
+  return Math.tanh(1.4 * sample) / Math.tanh(1.4);
+}
+
+function buildBroadcastSparklePcm(): Buffer {
+  const durationSeconds = 3.45;
+  const sampleCount = Math.floor(durationSeconds * OUTRO_CHIME_SAMPLE_RATE);
+  const dry = new Float64Array(sampleCount);
+  const wet = new Float64Array(sampleCount);
+
+  for (let index = 0; index < sampleCount; index += 1) {
+    const time = index / OUTRO_CHIME_SAMPLE_RATE;
+    let sample = 0.012 * Math.sin(2 * Math.PI * 15 * time) * Math.exp(-Math.max(0, time - 0.5) / 2.5);
+    for (const event of OUTRO_CHIME_EVENTS) {
+      sample += chimeTone(time, event);
+    }
+    dry[index] = softClip(sample);
+    wet[index] = dry[index];
+  }
+
+  for (const [delaySeconds, gain] of [
+    [0.055, 0.2],
+    [0.118, 0.11],
+    [0.205, 0.064]
+  ] as const) {
+    const delay = Math.floor(delaySeconds * OUTRO_CHIME_SAMPLE_RATE);
+    for (let index = delay; index < sampleCount; index += 1) {
+      wet[index] += dry[index - delay] * gain;
+    }
+  }
+
+  const fadeInSamples = Math.floor(0.025 * OUTRO_CHIME_SAMPLE_RATE);
+  const fadeOutSamples = Math.floor(0.38 * OUTRO_CHIME_SAMPLE_RATE);
+  for (let index = 0; index < Math.min(fadeInSamples, sampleCount); index += 1) {
+    wet[index] *= index / fadeInSamples;
+  }
+  for (let index = Math.max(0, sampleCount - fadeOutSamples); index < sampleCount; index += 1) {
+    wet[index] *= (sampleCount - index) / fadeOutSamples;
+  }
+
+  let peak = 0.01;
+  for (const sample of wet) {
+    peak = Math.max(peak, Math.abs(sample));
+  }
+  const scale = 0.92 / peak;
+  const buffer = Buffer.alloc(sampleCount * 2);
+  for (let index = 0; index < sampleCount; index += 1) {
+    const sample = Math.max(-1, Math.min(1, wet[index] * scale));
+    buffer.writeInt16LE(Math.round(sample * 32_767), index * 2);
+  }
+  return buffer;
 }
 
 function markerAttr(attrs: string, name: string): string | null {
@@ -232,49 +346,29 @@ async function ensureJingleAssets(): Promise<void> {
   }
 
   if (!existsSync(OUTRO_JINGLE_PATH)) {
-    await runFfmpeg([
-      "-f",
-      "lavfi",
-      "-i",
-      "sine=frequency=1046.5:duration=6.2",
-      "-f",
-      "lavfi",
-      "-i",
-      "sine=frequency=783.99:duration=6.2",
-      "-f",
-      "lavfi",
-      "-i",
-      "sine=frequency=659.25:duration=6.2",
-      "-f",
-      "lavfi",
-      "-i",
-      "sine=frequency=523.25:duration=6.2",
-      "-f",
-      "lavfi",
-      "-i",
-      "sine=frequency=523.25:duration=6.2",
-      "-f",
-      "lavfi",
-      "-i",
-      "sine=frequency=392:duration=6.2",
-      "-f",
-      "lavfi",
-      "-i",
-      "sine=frequency=329.63:duration=6.2",
-      "-f",
-      "lavfi",
-      "-i",
-      "sine=frequency=261.63:duration=6.2",
-      "-filter_complex",
-      "[0:a]atrim=0:1.05,adelay=0|0,afade=t=out:st=0.18:d=0.87,volume=0.28[h0];[4:a]atrim=0:1.05,adelay=0|0,afade=t=out:st=0.18:d=0.87,volume=0.10[l0];[1:a]atrim=0:1.05,adelay=500|500,afade=t=out:st=0.18:d=0.87,volume=0.27[h1];[5:a]atrim=0:1.05,adelay=500|500,afade=t=out:st=0.18:d=0.87,volume=0.10[l1];[2:a]atrim=0:1.15,adelay=1000|1000,afade=t=out:st=0.20:d=0.95,volume=0.30[h2];[6:a]atrim=0:1.15,adelay=1000|1000,afade=t=out:st=0.20:d=0.95,volume=0.12[l2];[3:a]atrim=0:1.8,adelay=1520|1520,afade=t=out:st=0.32:d=1.48,volume=0.27[h3];[7:a]atrim=0:1.8,adelay=1520|1520,afade=t=out:st=0.32:d=1.48,volume=0.11[l3];[h0][l0][h1][l1][h2][l2][h3][l3]amix=inputs=8:duration=longest:normalize=0,afade=t=in:st=0:d=0.04,afade=t=out:st=3.0:d=0.65,aecho=0.35:0.25:85:0.10,loudnorm=I=-17:TP=-1.5:LRA=7[a]",
-      "-map",
-      "[a]",
-      "-codec:a",
-      "libmp3lame",
-      "-b:a",
-      "128k",
-      OUTRO_JINGLE_PATH
-    ]);
+    const outroPcmPath = path.join(JINGLE_DIR, "outro-jingle-broadcast-sparkle.pcm");
+    await writeFile(outroPcmPath, buildBroadcastSparklePcm());
+    try {
+      await runFfmpeg([
+        "-f",
+        "s16le",
+        "-ar",
+        String(OUTRO_CHIME_SAMPLE_RATE),
+        "-ac",
+        "1",
+        "-i",
+        outroPcmPath,
+        "-filter:a",
+        "loudnorm=I=-17:TP=-1.5:LRA=7",
+        "-codec:a",
+        "libmp3lame",
+        "-b:a",
+        "128k",
+        OUTRO_JINGLE_PATH
+      ]);
+    } finally {
+      await rm(outroPcmPath, { force: true });
+    }
   }
 }
 
