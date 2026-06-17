@@ -123,8 +123,18 @@ export interface PrepareScriptRequest {
   script: string;
 }
 
-export interface PrepareScriptResponse {
-  script: string;
+export type ScriptPrepJobStatus = "queued" | "running" | "succeeded" | "failed";
+
+export interface PrepareScriptJobResponse {
+  externalJobId: string;
+  status: ScriptPrepJobStatus;
+}
+
+export interface PrepareScriptPollResponse {
+  externalJobId: string;
+  status: ScriptPrepJobStatus;
+  script: string | null;
+  error: string | null;
 }
 
 export interface NarrationPollResponse extends NarrationJobResponse {

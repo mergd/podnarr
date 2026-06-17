@@ -10,7 +10,9 @@ import type {
   NarrationPollResponse,
   NarrationRequest,
   PrepareScriptRequest,
-  PrepareScriptResponse,
+  PrepareScriptJobResponse,
+  PrepareScriptPollResponse,
+  ScriptPrepJobStatus,
   TtsProvider
 } from "@podnarr/shared/tts";
 import { DEFAULT_TTS_CONFIG } from "@podnarr/shared/tts";
@@ -56,6 +58,15 @@ const GENERIC_IMAGE_DESCRIPTIONS = [
 ];
 
 const jobs = new Map<string, StoredJobRecord>();
+
+interface ScriptPrepJobRecord {
+  externalJobId: string;
+  status: ScriptPrepJobStatus;
+  script: string | null;
+  error: string | null;
+}
+
+const scriptPrepJobs = new Map<string, ScriptPrepJobRecord>();
 const app = Fastify({ logger: true, bodyLimit: 4 * 1024 * 1024 });
 
 function isAuthorized(authHeader: string | undefined): boolean {
@@ -551,8 +562,46 @@ app.post<{ Body: PrepareScriptRequest }>("/v1/scripts/prepare", async (request, 
     return reply.status(400).send({ error: "script is required" });
   }
 
-  const script = await prepareReadAloudScript(body.script);
-  return reply.send({ script } satisfies PrepareScriptResponse);
+  const externalJobId = crypto.randomUUID();
+  const job: ScriptPrepJobRecord = {
+    externalJobId,
+    status: "queued",
+    script: null,
+    error: null
+  };
+  scriptPrepJobs.set(externalJobId, job);
+
+  void (async () => {
+    job.status = "running";
+    try {
+      job.script = await prepareReadAloudScript(body.script);
+      job.status = "succeeded";
+      job.error = null;
+    } catch (error) {
+      job.status = "failed";
+      job.error = error instanceof Error ? error.message : String(error);
+    }
+  })();
+
+  return reply.send({ externalJobId, status: job.status } satisfies PrepareScriptJobResponse);
+});
+
+app.get<{ Params: { id: string } }>("/v1/scripts/prepare/:id", async (request, reply) => {
+  if (!isAuthorized(request.headers.authorization)) {
+    return reply.status(401).send({ error: "Unauthorized" });
+  }
+
+  const job = scriptPrepJobs.get(request.params.id);
+  if (!job) {
+    return reply.status(404).send({ error: "Not found" });
+  }
+
+  return reply.send({
+    externalJobId: job.externalJobId,
+    status: job.status,
+    script: job.script,
+    error: job.error
+  } satisfies PrepareScriptPollResponse);
 });
 
 app.post<{ Body: NarrationRequest }>("/v1/narrations", async (request, reply) => {
@@ -616,18 +665,20 @@ app.get<{ Params: { id: string } }>("/v1/narrations/:id", async (request, reply)
   }
 
   if (job.provider === "gemini_batch" && job.status === "running") {
-    try {
-      await advanceGeminiBatchJob(RENDER_DIR, job, INTRO_JINGLE_PATH, OUTRO_JINGLE_PATH);
-      jobs.set(job.externalJobId, job);
-    } catch (error) {
-      if (await deferJobOnDailyBudget(job, error)) {
+    void advanceGeminiBatchJob(RENDER_DIR, job, INTRO_JINGLE_PATH, OUTRO_JINGLE_PATH)
+      .then(() => {
         jobs.set(job.externalJobId, job);
-        return reply.send(toPollResponse(job));
-      }
-      job.status = "failed";
-      job.error = error instanceof Error ? error.message : String(error);
-      await saveStoredJob(RENDER_DIR, job);
-    }
+      })
+      .catch(async (error: unknown) => {
+        if (await deferJobOnDailyBudget(job, error)) {
+          jobs.set(job.externalJobId, job);
+          return;
+        }
+        job.status = "failed";
+        job.error = error instanceof Error ? error.message : String(error);
+        await saveStoredJob(RENDER_DIR, job);
+        jobs.set(job.externalJobId, job);
+      });
   }
 
   return reply.send(toPollResponse(job));

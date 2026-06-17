@@ -1,10 +1,11 @@
 import type { PostQueueMessage } from "@podnarr/shared/queue";
-import { MAX_NARRATION_POLL_ATTEMPTS } from "@podnarr/shared/queue";
+import { MAX_NARRATION_POLL_ATTEMPTS, MAX_SCRIPT_PREP_POLL_ATTEMPTS } from "@podnarr/shared/queue";
 import {
   DEFAULT_TTS_CONFIG,
   type NarrationJobResponse,
   type NarrationPollResponse,
-  type PrepareScriptResponse
+  type PrepareScriptJobResponse,
+  type PrepareScriptPollResponse
 } from "@podnarr/shared/tts";
 
 import type { Env } from "./env";
@@ -63,7 +64,17 @@ async function fetchAudioService<T>(env: Env, path: string, init?: RequestInit):
     headers.set("authorization", `Bearer ${env.AUDIO_SERVICE_TOKEN}`);
   }
   const response = await fetch(`${env.AUDIO_SERVICE_URL}${path}`, { ...init, headers });
-  const payload = (await response.json()) as unknown;
+  const raw = await response.text();
+  let payload: unknown;
+  try {
+    payload = raw ? JSON.parse(raw) : null;
+  } catch {
+    const snippet = raw.trim().slice(0, 200);
+    if (/error code:\s*524/i.test(snippet)) {
+      throw new Error("Audio service timed out (524)");
+    }
+    throw new Error(`Audio service returned non-JSON (${response.status}): ${snippet}`);
+  }
   if (!response.ok) {
     const message =
       payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
@@ -94,11 +105,64 @@ async function handleGenerate(env: Env, message: Extract<PostQueueMessage, { typ
     textContent: post.text_content,
     visualMetadataJson: post.visual_metadata_json
   });
-  const prepared = await fetchAudioService<PrepareScriptResponse>(env, "/v1/scripts/prepare", {
+  const prepared = await fetchAudioService<PrepareScriptJobResponse>(env, "/v1/scripts/prepare", {
     method: "POST",
     body: JSON.stringify({ script: extractedScript })
   });
-  const script = prepared.script;
+
+  const pollMessage: PostQueueMessage = {
+    type: "post.poll_script_prep",
+    jobId: crypto.randomUUID(),
+    publicationId: message.publicationId,
+    postId: message.postId,
+    prepareJobId: prepared.externalJobId,
+    enqueuedAt: new Date().toISOString(),
+    attempt: 0
+  };
+  await env.PROCESSING_QUEUE.send(pollMessage, { delaySeconds: 10 });
+}
+
+async function handlePollScriptPrep(
+  env: Env,
+  message: Extract<PostQueueMessage, { type: "post.poll_script_prep" }>
+): Promise<void> {
+  const poll = await fetchAudioService<PrepareScriptPollResponse>(
+    env,
+    `/v1/scripts/prepare/${encodeURIComponent(message.prepareJobId)}`
+  );
+
+  if (poll.status === "failed") {
+    const error = poll.error ?? "Script preparation failed";
+    await env.DB
+      .prepare("UPDATE posts SET status = 'failed', last_error = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?1")
+      .bind(message.postId, error)
+      .run();
+    await alertDiscord(env, "Podnarr script prep failed", `postId=${message.postId}\nprepareJobId=${message.prepareJobId}\n${error}`);
+    return;
+  }
+
+  if (poll.status !== "succeeded" || !poll.script) {
+    if (message.attempt >= MAX_SCRIPT_PREP_POLL_ATTEMPTS) {
+      throw new Error("Script preparation polling exceeded retry limit.");
+    }
+    await env.PROCESSING_QUEUE.send({ ...message, jobId: crypto.randomUUID(), attempt: message.attempt + 1 }, { delaySeconds: 45 });
+    return;
+  }
+
+  const post = await env.DB
+    .prepare(
+      `SELECT posts.*, publications.title AS publication_title
+      FROM posts
+      JOIN publications ON publications.id = posts.publication_id
+      WHERE posts.id = ?1`
+    )
+    .bind(message.postId)
+    .first<PostRow>();
+  if (!post) {
+    throw new Error(`Post ${message.postId} was not found.`);
+  }
+
+  const script = poll.script;
   const estimatedMinutes = estimateAudioMinutes(script);
   const provider = (post.tts_provider ?? env.DEFAULT_TTS_PROVIDER ?? DEFAULT_TTS_CONFIG.provider) as typeof DEFAULT_TTS_CONFIG.provider;
   const model = post.tts_model ?? env.DEFAULT_TTS_MODEL ?? DEFAULT_TTS_CONFIG.model;
@@ -216,6 +280,8 @@ async function handlePoll(env: Env, message: Extract<PostQueueMessage, { type: "
 async function handleMessage(env: Env, message: PostQueueMessage): Promise<void> {
   if (message.type === "post.generate") {
     await handleGenerate(env, message);
+  } else if (message.type === "post.poll_script_prep") {
+    await handlePollScriptPrep(env, message);
   } else {
     await handlePoll(env, message);
   }
@@ -231,7 +297,11 @@ export default {
       } catch (error) {
         const messageText = error instanceof Error ? error.message : String(error);
         await markJob(env.DB, message.body.jobId, "failed", messageText);
-        if (message.body.type === "post.generate" || message.body.attempt >= MAX_NARRATION_POLL_ATTEMPTS) {
+        const shouldFailPost =
+          message.body.type === "post.generate" ||
+          (message.body.type === "post.poll_script_prep" && message.body.attempt >= MAX_SCRIPT_PREP_POLL_ATTEMPTS) ||
+          (message.body.type === "post.poll_narration" && message.body.attempt >= MAX_NARRATION_POLL_ATTEMPTS);
+        if (shouldFailPost) {
           await env.DB
             .prepare("UPDATE posts SET status = 'failed', last_error = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?1")
             .bind(message.body.postId, messageText)

@@ -8,6 +8,15 @@ export type PostQueueMessage =
       attempt: number;
     }
   | {
+      type: "post.poll_script_prep";
+      jobId: string;
+      publicationId: number;
+      postId: number;
+      prepareJobId: string;
+      enqueuedAt: string;
+      attempt: number;
+    }
+  | {
       type: "post.poll_narration";
       jobId: string;
       publicationId: number;
@@ -18,4 +27,5 @@ export type PostQueueMessage =
     };
 
 export const MAX_POST_PROCESSING_ATTEMPTS = 4;
+export const MAX_SCRIPT_PREP_POLL_ATTEMPTS = 40;
 export const MAX_NARRATION_POLL_ATTEMPTS = 96;

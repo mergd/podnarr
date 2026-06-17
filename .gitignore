@@ -5,3 +5,5 @@ dist
 .env
 services/audio/.env
 *.tsbuildinfo
+
+.DS_Store
