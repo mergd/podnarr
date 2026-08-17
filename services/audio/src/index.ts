@@ -1,8 +1,10 @@
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { pipeline } from "node:stream/promises";
+import type { Readable } from "node:stream";
 
 import Fastify from "fastify";
 import type {
@@ -28,6 +30,7 @@ import {
   writeChunkPcm,
   type StoredJobRecord
 } from "./jobStore.js";
+import { renderSpeechChunk } from "./speechSdkRenderer.js";
 
 const PORT = Number(process.env.PORT) || 8000;
 const SERVICE_TOKEN = process.env.AUDIO_SERVICE_TOKEN ?? "";
@@ -58,6 +61,7 @@ const GENERIC_IMAGE_DESCRIPTIONS = [
 ];
 
 const jobs = new Map<string, StoredJobRecord>();
+const ASSEMBLY_DIR = path.join(RENDER_DIR, "assemblies");
 
 interface ScriptPrepJobRecord {
   externalJobId: string;
@@ -69,6 +73,10 @@ interface ScriptPrepJobRecord {
 const scriptPrepJobs = new Map<string, ScriptPrepJobRecord>();
 const app = Fastify({ logger: true, bodyLimit: 4 * 1024 * 1024 });
 
+app.addContentTypeParser("application/x-podnarr-pcm", (request, payload, done) => {
+  done(null, payload);
+});
+
 function isAuthorized(authHeader: string | undefined): boolean {
   return !SERVICE_TOKEN || authHeader === `Bearer ${SERVICE_TOKEN}`;
 }
@@ -79,8 +87,11 @@ function estimateAudioMinutes(script: string): number {
 }
 
 function costPerMinute(provider: TtsProvider, model: string): number {
-  if (provider === "gemini_batch") return 0.015;
+  // Narration now uses direct chunk synthesis. Retain the legacy provider name
+  // for stored jobs, but do not report the old batch discount for new renders.
+  if (provider === "gemini_batch") return 0.03;
   if (provider === "gemini_standard") return 0.03;
+  if (provider === "fish_audio") return 0;
   if (provider === "elevenlabs" && model.includes("turbo")) return 0.05;
   if (provider === "inworld" && model.includes("mini")) return 0.025;
   if (provider === "inworld") return 0.035;
@@ -471,6 +482,91 @@ async function renderGeminiBatch(job: StoredJobRecord): Promise<void> {
   }
 }
 
+async function normalizeSpeechChunkToPcm(
+  chunkDir: string,
+  chunk: StoredJobRecord["chunks"][number],
+  audio: Uint8Array,
+  mediaType: string
+): Promise<void> {
+  const extension = mediaType.includes("mpeg") || mediaType.includes("mp3") ? "mp3" : "wav";
+  const sourcePath = path.join(chunkDir, `${chunk.key}.source.${extension}`);
+  const outputPath = path.join(chunkDir, chunk.fileName);
+  await writeFile(sourcePath, audio);
+  try {
+    await runFfmpeg(["-y", "-i", sourcePath, "-f", "s16le", "-ar", "24000", "-ac", "1", outputPath]);
+  } finally {
+    await rm(sourcePath, { force: true });
+  }
+}
+
+async function normalizeSpeechBytesToPcm(audio: Uint8Array, mediaType: string): Promise<Buffer> {
+  await mkdir(ASSEMBLY_DIR, { recursive: true });
+  const id = crypto.randomUUID();
+  const extension = mediaType.includes("mpeg") || mediaType.includes("mp3") ? "mp3" : "wav";
+  const sourcePath = path.join(ASSEMBLY_DIR, `${id}.source.${extension}`);
+  const outputPath = path.join(ASSEMBLY_DIR, `${id}.pcm`);
+  await writeFile(sourcePath, audio);
+  try {
+    await runFfmpeg(["-y", "-i", sourcePath, "-f", "s16le", "-ar", "24000", "-ac", "1", outputPath]);
+    return await readFile(outputPath);
+  } finally {
+    await Promise.all([rm(sourcePath, { force: true }), rm(outputPath, { force: true })]);
+  }
+}
+
+function assemblyMetadata(request: { headers: Record<string, string | string[] | undefined> }): { title: string; publicationTitle: string } {
+  const raw = request.headers["x-podnarr-metadata"];
+  if (typeof raw !== "string") return { title: "Podnarr episode", publicationTitle: "" };
+  try {
+    const value = JSON.parse(raw) as { title?: unknown; publicationTitle?: unknown };
+    return {
+      title: typeof value.title === "string" ? value.title.slice(0, 200) : "Podnarr episode",
+      publicationTitle: typeof value.publicationTitle === "string" ? value.publicationTitle.slice(0, 200) : ""
+    };
+  } catch {
+    return { title: "Podnarr episode", publicationTitle: "" };
+  }
+}
+
+async function renderSpeechSdkPodcast(job: StoredJobRecord): Promise<void> {
+  await mkdir(RENDER_DIR, { recursive: true });
+  await ensureJingleAssets();
+  await saveStoredJob(RENDER_DIR, job);
+  job.status = "running";
+
+  const chunkDir = jobChunkDir(RENDER_DIR, job.externalJobId);
+  await mkdir(chunkDir, { recursive: true });
+  for (const chunk of job.chunks) {
+    const chunkPath = path.join(chunkDir, chunk.fileName);
+    if (existsSync(chunkPath)) {
+      continue;
+    }
+    const rendered = await renderSpeechChunk({
+      provider: job.provider,
+      model: job.model,
+      voice: job.voice,
+      text: chunk.text
+    });
+    await normalizeSpeechChunkToPcm(chunkDir, chunk, rendered.audio, rendered.mediaType);
+    await saveStoredJob(RENDER_DIR, job);
+  }
+
+  const outputPath = path.join(RENDER_DIR, `${job.externalJobId}.mp3`);
+  const assembled = await assembleEpisodeMp3({
+    body: job.body,
+    chunkDir,
+    chunks: job.chunks,
+    introJinglePath: INTRO_JINGLE_PATH,
+    outroJinglePath: OUTRO_JINGLE_PATH,
+    outputPath
+  });
+  job.audioPath = outputPath;
+  job.durationSeconds = assembled.durationSeconds;
+  job.status = "succeeded";
+  job.error = null;
+  await saveStoredJob(RENDER_DIR, job);
+}
+
 async function renderMockPodcast(job: StoredJobRecord): Promise<void> {
   await mkdir(RENDER_DIR, { recursive: true });
   await ensureJingleAssets();
@@ -562,28 +658,79 @@ app.post<{ Body: PrepareScriptRequest }>("/v1/scripts/prepare", async (request, 
     return reply.status(400).send({ error: "script is required" });
   }
 
-  const externalJobId = crypto.randomUUID();
-  const job: ScriptPrepJobRecord = {
-    externalJobId,
-    status: "queued",
-    script: null,
-    error: null
-  };
-  scriptPrepJobs.set(externalJobId, job);
+  const script = await prepareReadAloudScript(body.script);
+  return reply.send({ script });
+});
 
-  void (async () => {
-    job.status = "running";
-    try {
-      job.script = await prepareReadAloudScript(body.script);
-      job.status = "succeeded";
-      job.error = null;
-    } catch (error) {
-      job.status = "failed";
-      job.error = error instanceof Error ? error.message : String(error);
+app.post<{
+  Body: { provider: TtsProvider; model: string; voice: string; text: string };
+}>("/v1/tts/chunk", async (request, reply) => {
+  if (!isAuthorized(request.headers.authorization)) {
+    return reply.status(401).send({ error: "Unauthorized" });
+  }
+  const body = request.body;
+  if (!body?.provider || !body.model || !body.text) {
+    return reply.status(400).send({ error: "provider, model, and text are required" });
+  }
+
+  const rendered = await renderSpeechChunk(body);
+  const pcm = await normalizeSpeechBytesToPcm(rendered.audio, rendered.mediaType);
+  reply.header("content-type", "application/x-podnarr-pcm");
+  reply.header("x-podnarr-provider", rendered.provider);
+  reply.header("x-podnarr-fallback", String(rendered.usedFallback));
+  return reply.send(pcm);
+});
+
+app.post("/v1/episodes/assemble", async (request, reply) => {
+  if (!isAuthorized(request.headers.authorization)) {
+    return reply.status(401).send({ error: "Unauthorized" });
+  }
+
+  const body = request.body as Readable | undefined;
+  if (!body || typeof body.pipe !== "function") {
+    return reply.status(400).send({ error: "A PCM stream is required" });
+  }
+
+  await ensureJingleAssets();
+  await mkdir(ASSEMBLY_DIR, { recursive: true });
+  const id = crypto.randomUUID();
+  const pcmPath = path.join(ASSEMBLY_DIR, `${id}.pcm`);
+  const outputPath = path.join(ASSEMBLY_DIR, `${id}.mp3`);
+  const metadata = assemblyMetadata(request);
+  try {
+    await pipeline(body, createWriteStream(pcmPath));
+    const pcmInfo = await stat(pcmPath);
+    if (pcmInfo.size === 0) {
+      return reply.status(400).send({ error: "Cannot assemble an empty narration" });
     }
-  })();
-
-  return reply.send({ externalJobId, status: job.status } satisfies PrepareScriptJobResponse);
+    await runFfmpeg([
+      "-y",
+      "-f", "s16le",
+      "-ar", "24000",
+      "-ac", "1",
+      "-i", pcmPath,
+      "-i", INTRO_JINGLE_PATH,
+      "-i", OUTRO_JINGLE_PATH,
+      "-filter_complex",
+      "[1:a][0:a][2:a]concat=n=3:v=0:a=1,loudnorm=I=-16:TP=-1.5:LRA=11[a]",
+      "-map",
+      "[a]",
+      "-metadata",
+      `title=${metadata.title}`,
+      "-metadata",
+      `album=${metadata.publicationTitle}`,
+      "-codec:a",
+      "libmp3lame",
+      "-b:a",
+      "128k",
+      outputPath
+    ]);
+    reply.header("content-type", "audio/mpeg");
+    reply.header("x-podnarr-duration-seconds", String(Math.round(pcmInfo.size / (24000 * 2) + 11)));
+    return reply.send(createReadStream(outputPath));
+  } finally {
+    reply.raw.once("finish", () => void Promise.all([rm(pcmPath, { force: true }), rm(outputPath, { force: true })]));
+  }
 });
 
 app.get<{ Params: { id: string } }>("/v1/scripts/prepare/:id", async (request, reply) => {
@@ -631,12 +778,7 @@ app.post<{ Body: NarrationRequest }>("/v1/narrations", async (request, reply) =>
   });
   jobs.set(job.externalJobId, job);
 
-  const renderer =
-    ENABLE_MOCK_RENDERER || !GEMINI_API_KEY
-      ? renderMockPodcast
-      : provider === "gemini_batch"
-        ? renderGeminiBatch
-        : renderGeminiStandard;
+  const renderer = ENABLE_MOCK_RENDERER ? renderMockPodcast : renderSpeechSdkPodcast;
 
   renderer(job).catch(async (error: unknown) => {
     if (await deferJobOnDailyBudget(job, error)) {

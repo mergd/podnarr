@@ -4,6 +4,29 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-05-09",
   "compatibility_flags": ["nodejs_compat"],
+  "containers": [
+    {
+      "class_name": "AudioServiceContainer",
+      "image": "../../services/audio/Dockerfile",
+      "image_build_context": "../../",
+      "max_instances": 1,
+      "instance_type": "standard-1"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "AUDIO_SERVICE",
+        "class_name": "AudioServiceContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["AudioServiceContainer"]
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
@@ -35,11 +58,13 @@
     ]
   },
   "vars": {
-    "AUDIO_SERVICE_URL": "https://podnarr-audio-production.up.railway.app",
     "PROCESSING_VERSION": "v1",
-    "DEFAULT_TTS_PROVIDER": "gemini_batch",
-    "DEFAULT_TTS_MODEL": "gemini-3.1-flash-tts-preview",
-    "DEFAULT_TTS_VOICE": "Orus"
+    "DEFAULT_TTS_PROVIDER": "fish_audio",
+    "DEFAULT_TTS_MODEL": "s2.1-pro-free",
+    "DEFAULT_TTS_VOICE": "bf322df2096a46f18c579d0baa36f41d"
+  },
+  "triggers": {
+    "crons": ["*/15 * * * *"]
   },
   "observability": {
     "enabled": true,

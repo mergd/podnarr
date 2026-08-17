@@ -1,4 +1,5 @@
 export type TtsProvider =
+  | "fish_audio"
   | "gemini_batch"
   | "gemini_standard"
   | "elevenlabs"
@@ -17,10 +18,10 @@ export interface TtsProviderConfig {
 }
 
 export const DEFAULT_TTS_CONFIG: TtsProviderConfig = {
-  provider: "gemini_batch",
-  model: "gemini-3.1-flash-tts-preview",
-  voice: "Orus",
-  estimatedCostPerAudioMinuteUsd: 0.015
+  provider: "fish_audio",
+  model: "s2.1-pro-free",
+  voice: "",
+  estimatedCostPerAudioMinuteUsd: 0
 };
 
 export const GEMINI_TTS_MODEL_OPTIONS: Array<TtsProviderConfig & { note: string }> = [

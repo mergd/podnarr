@@ -1,12 +1,19 @@
 import type { PostQueueMessage } from "@podnarr/shared/queue";
 import type { TtsProvider } from "@podnarr/shared/tts";
 
+import type { AudioServiceContainer } from "./audioContainer";
+
 export interface Env {
   DB: D1Database;
   AUDIO_BUCKET: R2Bucket;
   PROCESSING_QUEUE: Queue<PostQueueMessage>;
-  AUDIO_SERVICE_URL: string;
+  AUDIO_SERVICE: DurableObjectNamespace<AudioServiceContainer>;
   AUDIO_SERVICE_TOKEN?: string;
+  GEMINI_API_KEY?: string;
+  FISH_AUDIO_API_KEY?: string;
+  FISH_AUDIO_VOICE?: string;
+  GEMINI_TTS_FALLBACK_VOICE?: string;
+  PODNARR_SITE_URL?: string;
   PROCESSING_VERSION: string;
   DEFAULT_TTS_PROVIDER?: TtsProvider;
   DEFAULT_TTS_MODEL?: string;
