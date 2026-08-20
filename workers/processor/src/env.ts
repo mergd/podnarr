@@ -9,10 +9,10 @@ export interface Env {
   PROCESSING_QUEUE: Queue<PostQueueMessage>;
   AUDIO_SERVICE: DurableObjectNamespace<AudioServiceContainer>;
   AUDIO_SERVICE_TOKEN?: string;
-  GEMINI_API_KEY?: string;
+  OPENROUTER_API_KEY?: string;
+  OPENROUTER_IMAGE_MODEL?: string;
   FISH_AUDIO_API_KEY?: string;
   FISH_AUDIO_VOICE?: string;
-  GEMINI_TTS_FALLBACK_VOICE?: string;
   PODNARR_SITE_URL?: string;
   PROCESSING_VERSION: string;
   DEFAULT_TTS_PROVIDER?: TtsProvider;

@@ -1,4 +1,4 @@
-import type { NarrationRequest } from "./tts";
+import type { NarrationRequest } from "./tts.js";
 
 export interface NarrationChunk {
   index: number;

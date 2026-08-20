@@ -12,22 +12,19 @@ import type {
   NarrationPollResponse,
   NarrationRequest,
   PrepareScriptRequest,
-  PrepareScriptJobResponse,
   PrepareScriptPollResponse,
   ScriptPrepJobStatus,
   TtsProvider
 } from "@podnarr/shared/tts";
-import { DEFAULT_TTS_CONFIG } from "@podnarr/shared/tts";
+import { DEFAULT_TTS_CONFIG, isGeminiTtsProvider } from "@podnarr/shared/tts";
 
 import { assembleEpisodeMp3 } from "./episodeAssembly.js";
-import { advanceGeminiBatchJob, createStoredJob, hydrateStoredJob } from "./geminiBatchRender.js";
-import { getGeminiUsageSnapshot, geminiJson, isGeminiDailyBudgetExhausted } from "./geminiClient.js";
-import { generateGeminiPcm } from "./geminiTts.js";
+import { createStoredJob, hydrateStoredJob } from "./geminiBatchRender.js";
+import { describeImageWithOpenRouter, openRouterImageModel } from "./openrouterDescribe.js";
 import {
   jobChunkDir,
   loadStoredJob,
   saveStoredJob,
-  writeChunkPcm,
   type StoredJobRecord
 } from "./jobStore.js";
 import { renderSpeechChunk } from "./speechSdkRenderer.js";
@@ -37,9 +34,7 @@ const SERVICE_TOKEN = process.env.AUDIO_SERVICE_TOKEN ?? "";
 const PUBLIC_BASE_URL = process.env.PUBLIC_AUDIO_SERVICE_URL ?? `http://localhost:${PORT}`;
 const RENDER_DIR = process.env.RENDER_DIR ?? path.join(tmpdir(), "podnarr-audio");
 const ENABLE_MOCK_RENDERER = process.env.ENABLE_MOCK_RENDERER !== "false";
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL ?? "";
-const GEMINI_SCRIPT_MODEL = process.env.GEMINI_SCRIPT_MODEL ?? "gemini-3-flash-preview";
 const SITE_PLUG = process.env.PODNARR_SITE_URL ?? "podnarr.yet-to-be.com";
 const JINGLE_DIR = path.join(RENDER_DIR, "assets");
 const INTRO_JINGLE_PATH = path.join(JINGLE_DIR, "intro-jingle-v7.mp3");
@@ -116,11 +111,6 @@ function runFfmpeg(args: string[]): Promise<void> {
       }
     });
   });
-}
-
-function parseTextResponse(payload: unknown): string {
-  const root = payload as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-  return root.candidates?.[0]?.content?.parts?.map((part) => part.text).filter(Boolean).join("").trim() ?? "";
 }
 
 function chimeEnvelope(
@@ -242,30 +232,7 @@ async function describeImage(src: string): Promise<string | null> {
     }
     const mimeType = image.headers.get("content-type")?.split(";")[0] || "image/jpeg";
     const data = Buffer.from(await image.arrayBuffer()).toString("base64");
-    const payload = await geminiJson<unknown>(`models/${encodeURIComponent(GEMINI_SCRIPT_MODEL)}:generateContent`, {
-      method: "POST",
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text:
-                  [
-                    "You are describing the actual pixels of an article image for a podcast listener.",
-                    "Return one concise spoken sentence that says what the image, chart, table, or screenshot visibly contains.",
-                    "If it is a chart, mention the visible axes, labels, trend, or comparison when legible.",
-                    "Do not say 'Visual:', 'image appears here', 'an image is shown', or any placeholder wording.",
-                    "Do not mention alt text, filenames, URLs, or uncertainty unless the image is unreadable.",
-                    "Start with natural spoken phrasing such as 'The image shows...' or 'The chart shows...'."
-                  ].join(" ")
-              },
-              { inlineData: { mimeType, data } }
-            ]
-          }
-        ]
-      })
-    });
-    const description = parseTextResponse(payload)?.replace(/^Visual:\s*/i, "").trim();
+    const description = await describeImageWithOpenRouter(mimeType, data);
     if (!description || GENERIC_IMAGE_DESCRIPTIONS.some((pattern) => pattern.test(description))) {
       app.log.warn({ src, description }, "Image description was generic");
       return null;
@@ -405,81 +372,6 @@ async function getJob(externalJobId: string): Promise<StoredJobRecord | null> {
     jobs.set(externalJobId, stored);
   }
   return stored;
-}
-
-async function deferJobOnDailyBudget(job: StoredJobRecord, error: unknown): Promise<boolean> {
-  if (!isGeminiDailyBudgetExhausted(error)) {
-    return false;
-  }
-
-  job.status = "running";
-  job.error = null;
-  await saveStoredJob(RENDER_DIR, job);
-  return true;
-}
-
-async function renderGeminiStandard(job: StoredJobRecord): Promise<void> {
-  if (!GEMINI_API_KEY) {
-    throw new Error("GEMINI_API_KEY is not configured.");
-  }
-
-  await mkdir(RENDER_DIR, { recursive: true });
-  await ensureJingleAssets();
-  await saveStoredJob(RENDER_DIR, job);
-
-  const chunkDir = jobChunkDir(RENDER_DIR, job.externalJobId);
-  await mkdir(chunkDir, { recursive: true });
-  job.status = "running";
-
-  try {
-    for (const chunk of job.chunks) {
-      const chunkPath = path.join(chunkDir, chunk.fileName);
-      if (!existsSync(chunkPath)) {
-        const pcm = await generateGeminiPcm(job.model, job.voice, chunk.text, chunk.label);
-        await writeChunkPcm(RENDER_DIR, job.externalJobId, chunk, pcm);
-      }
-    }
-  } catch (error) {
-    if (await deferJobOnDailyBudget(job, error)) {
-      return;
-    }
-    throw error;
-  }
-
-  const outputPath = path.join(RENDER_DIR, `${job.externalJobId}.mp3`);
-  const assembled = await assembleEpisodeMp3({
-    body: job.body,
-    chunkDir,
-    chunks: job.chunks,
-    introJinglePath: INTRO_JINGLE_PATH,
-    outroJinglePath: OUTRO_JINGLE_PATH,
-    outputPath
-  });
-
-  job.audioPath = outputPath;
-  job.durationSeconds = assembled.durationSeconds;
-  job.status = "succeeded";
-  job.error = null;
-  await saveStoredJob(RENDER_DIR, job);
-}
-
-async function renderGeminiBatch(job: StoredJobRecord): Promise<void> {
-  if (!GEMINI_API_KEY) {
-    throw new Error("GEMINI_API_KEY is not configured.");
-  }
-
-  await mkdir(RENDER_DIR, { recursive: true });
-  await ensureJingleAssets();
-  await saveStoredJob(RENDER_DIR, job);
-  job.status = "running";
-  try {
-    await advanceGeminiBatchJob(RENDER_DIR, job, INTRO_JINGLE_PATH, OUTRO_JINGLE_PATH);
-  } catch (error) {
-    if (await deferJobOnDailyBudget(job, error)) {
-      return;
-    }
-    throw error;
-  }
 }
 
 async function normalizeSpeechChunkToPcm(
@@ -645,7 +537,7 @@ app.get("/health", async () => ({
   renderer: ENABLE_MOCK_RENDERER ? "mock-ffmpeg" : DEFAULT_TTS_CONFIG.provider,
   default_provider: DEFAULT_TTS_CONFIG.provider,
   public_base_url: PUBLIC_BASE_URL,
-  gemini: await getGeminiUsageSnapshot()
+  image_describe_model: openRouterImageModel()
 }));
 
 app.post<{ Body: PrepareScriptRequest }>("/v1/scripts/prepare", async (request, reply) => {
@@ -762,6 +654,10 @@ app.post<{ Body: NarrationRequest }>("/v1/narrations", async (request, reply) =>
   }
 
   const provider = body.provider ?? DEFAULT_TTS_CONFIG.provider;
+  if (isGeminiTtsProvider(provider)) {
+    return reply.status(400).send({ error: "Gemini TTS is disabled. Use fish_audio." });
+  }
+
   const model = body.model ?? DEFAULT_TTS_CONFIG.model;
   const voice = body.voice ?? DEFAULT_TTS_CONFIG.voice;
   const estimatedAudioMinutes = estimateAudioMinutes(body.script);
@@ -781,9 +677,6 @@ app.post<{ Body: NarrationRequest }>("/v1/narrations", async (request, reply) =>
   const renderer = ENABLE_MOCK_RENDERER ? renderMockPodcast : renderSpeechSdkPodcast;
 
   renderer(job).catch(async (error: unknown) => {
-    if (await deferJobOnDailyBudget(job, error)) {
-      return;
-    }
     job.status = "failed";
     job.error = error instanceof Error ? error.message : String(error);
     void saveStoredJob(RENDER_DIR, job);
@@ -804,23 +697,6 @@ app.get<{ Params: { id: string } }>("/v1/narrations/:id", async (request, reply)
   const job = await getJob(request.params.id);
   if (!job) {
     return reply.status(404).send({ error: "Not found" });
-  }
-
-  if (job.provider === "gemini_batch" && job.status === "running") {
-    void advanceGeminiBatchJob(RENDER_DIR, job, INTRO_JINGLE_PATH, OUTRO_JINGLE_PATH)
-      .then(() => {
-        jobs.set(job.externalJobId, job);
-      })
-      .catch(async (error: unknown) => {
-        if (await deferJobOnDailyBudget(job, error)) {
-          jobs.set(job.externalJobId, job);
-          return;
-        }
-        job.status = "failed";
-        job.error = error instanceof Error ? error.message : String(error);
-        await saveStoredJob(RENDER_DIR, job);
-        jobs.set(job.externalJobId, job);
-      });
   }
 
   return reply.send(toPollResponse(job));

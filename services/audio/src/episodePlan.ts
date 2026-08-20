@@ -1,6 +1,5 @@
+import { splitNarrationScript } from "@podnarr/shared/narration";
 import type { NarrationRequest } from "@podnarr/shared/tts";
-
-import { splitScript } from "./geminiTts.js";
 
 export interface ChunkDescriptor {
   key: string;
@@ -39,7 +38,7 @@ export function buildClosingLine(sitePlug: string): string {
 }
 
 export function buildEpisodeChunks(body: NarrationRequest, sitePlug: string): ChunkDescriptor[] {
-  const scriptChunks = splitScript(body.script);
+  const scriptChunks = splitNarrationScript(body.script);
   const chunks: ChunkDescriptor[] = [
     { key: "opening", fileName: "opening.pcm", text: buildOpeningLine(body), label: "opening" }
   ];

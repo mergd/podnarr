@@ -7,6 +7,7 @@
     ".": "./src/index.ts",
     "./api": "./src/api.ts",
     "./queue": "./src/queue.ts",
+    "./narration": "./src/narration.ts",
     "./tts": "./src/tts.ts"
   },
   "scripts": {

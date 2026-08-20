@@ -6,7 +6,7 @@ import {
   MAX_NARRATION_ASSEMBLY_ATTEMPTS,
   MAX_NARRATION_CHUNK_ATTEMPTS
 } from "@podnarr/shared/queue";
-import { DEFAULT_TTS_CONFIG, type NarrationRequest, type TtsProvider } from "@podnarr/shared/tts";
+import { DEFAULT_TTS_CONFIG, resolveActiveTtsConfig, type NarrationRequest, type TtsProvider } from "@podnarr/shared/tts";
 
 import type { Env } from "./env";
 import { buildNarrationScript, estimateAudioMinutes } from "./lib/script";
@@ -136,9 +136,20 @@ async function createNarrationJob(env: Env, post: PostRow, script: string): Prom
     ]);
   }
 
-  const provider = (post.tts_provider ?? env.DEFAULT_TTS_PROVIDER ?? DEFAULT_TTS_CONFIG.provider) as TtsProvider;
-  const model = post.tts_model ?? env.DEFAULT_TTS_MODEL ?? DEFAULT_TTS_CONFIG.model;
-  const voice = post.tts_voice ?? env.DEFAULT_TTS_VOICE ?? DEFAULT_TTS_CONFIG.voice;
+  const tts = resolveActiveTtsConfig(
+    {
+      provider: post.tts_provider as TtsProvider | null,
+      model: post.tts_model,
+      voice: post.tts_voice
+    },
+    {
+      provider: env.DEFAULT_TTS_PROVIDER ?? DEFAULT_TTS_CONFIG.provider,
+      model: env.DEFAULT_TTS_MODEL ?? DEFAULT_TTS_CONFIG.model,
+      voice: env.DEFAULT_TTS_VOICE ?? DEFAULT_TTS_CONFIG.voice,
+      estimatedCostPerAudioMinuteUsd: 0
+    }
+  );
+  const { provider, model, voice } = tts;
   const body: NarrationRequest = {
     postId: post.id,
     publicationTitle: post.publication_title,

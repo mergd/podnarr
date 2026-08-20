@@ -24,35 +24,27 @@ export const DEFAULT_TTS_CONFIG: TtsProviderConfig = {
   estimatedCostPerAudioMinuteUsd: 0
 };
 
+export function isGeminiTtsProvider(provider: TtsProvider): boolean {
+  return provider === "gemini_batch" || provider === "gemini_standard";
+}
+
+export function resolveActiveTtsConfig(
+  requested: { provider?: TtsProvider | null; model?: string | null; voice?: string | null },
+  fallback: TtsProviderConfig = DEFAULT_TTS_CONFIG
+): TtsProviderConfig {
+  const provider = requested.provider ?? fallback.provider;
+  if (isGeminiTtsProvider(provider)) {
+    return { ...fallback };
+  }
+  return {
+    provider,
+    model: requested.model || fallback.model,
+    voice: requested.voice || fallback.voice,
+    estimatedCostPerAudioMinuteUsd: provider === "fish_audio" ? 0 : fallback.estimatedCostPerAudioMinuteUsd
+  };
+}
+
 export const GEMINI_TTS_MODEL_OPTIONS: Array<TtsProviderConfig & { note: string }> = [
-  {
-    provider: "gemini_batch",
-    model: "gemini-3.1-flash-tts-preview",
-    voice: "Orus",
-    estimatedCostPerAudioMinuteUsd: 0.015,
-    note: "Default. Same 3.1 voice quality at half the Gemini API cost via batchGenerateContent."
-  },
-  {
-    provider: "gemini_standard",
-    model: "gemini-3.1-flash-tts-preview",
-    voice: "Orus",
-    estimatedCostPerAudioMinuteUsd: 0.03,
-    note: "Immediate sync TTS when you need the episode right away."
-  },
-  {
-    provider: "gemini_standard",
-    model: "gemini-2.5-flash-preview-tts",
-    voice: "Orus",
-    estimatedCostPerAudioMinuteUsd: 0.015,
-    note: "Cheaper fallback when cost or long-job stability matters more than expressiveness."
-  },
-  {
-    provider: "gemini_standard",
-    model: "gemini-2.5-pro-preview-tts",
-    voice: "Orus",
-    estimatedCostPerAudioMinuteUsd: 0.025,
-    note: "Higher-quality 2.5 tier when flash preview sounds too thin."
-  },
   {
     provider: "openai",
     model: "gpt-4o-mini-tts",
