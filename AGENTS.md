@@ -2,7 +2,7 @@
 
 ## TTS cost
 
-Narration uses **Fish Audio** (`s2.1-pro-free` via SpeechSDK). Gemini TTS is unwired and must not be called for audio. Article image descriptions use OpenRouter (`OPENROUTER_API_KEY`, default model `openai/gpt-5.6-luna`).
+Narration uses **Fish Audio** (`fish-audio/s2.1-pro-free` via Vercel AI Gateway). Gemini TTS is unwired and must not be called for audio. Article image descriptions use OpenRouter (`OPENROUTER_API_KEY`, default model `openai/gpt-5.6-luna`).
 
 When verifying audio/TTS changes:
 

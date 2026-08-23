@@ -19,7 +19,7 @@ export interface TtsProviderConfig {
 
 export const DEFAULT_TTS_CONFIG: TtsProviderConfig = {
   provider: "fish_audio",
-  model: "s2.1-pro-free",
+  model: "fish-audio/s2.1-pro-free",
   voice: "",
   estimatedCostPerAudioMinuteUsd: 0
 };

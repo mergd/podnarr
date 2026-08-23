@@ -60,7 +60,7 @@
   "vars": {
     "PROCESSING_VERSION": "v1",
     "DEFAULT_TTS_PROVIDER": "fish_audio",
-    "DEFAULT_TTS_MODEL": "s2.1-pro-free",
+    "DEFAULT_TTS_MODEL": "fish-audio/s2.1-pro-free",
     "DEFAULT_TTS_VOICE": "bf322df2096a46f18c579d0baa36f41d",
     "OPENROUTER_IMAGE_MODEL": "openai/gpt-5.6-luna"
   },

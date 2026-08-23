@@ -11,7 +11,7 @@ export interface Env {
   AUDIO_SERVICE_TOKEN?: string;
   OPENROUTER_API_KEY?: string;
   OPENROUTER_IMAGE_MODEL?: string;
-  FISH_AUDIO_API_KEY?: string;
+  AI_GATEWAY_API_KEY?: string;
   FISH_AUDIO_VOICE?: string;
   PODNARR_SITE_URL?: string;
   PROCESSING_VERSION: string;

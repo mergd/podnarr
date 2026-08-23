@@ -2,7 +2,7 @@
 
 Substack-to-podcast narration service.
 
-Podnarr turns Substack posts into narrated podcast episodes through a private admin API and exposes public listener pages plus podcast RSS feeds. The first quality/cost target is Fish Audio (`s2.1-pro-free`) through SpeechSDK, with provider contracts kept open for ElevenLabs, Inworld, MiniMax, OpenAI, and local experiments. Gemini TTS is unwired.
+Podnarr turns Substack posts into narrated podcast episodes through a private admin API and exposes public listener pages plus podcast RSS feeds. The first quality/cost target is Fish Audio (`fish-audio/s2.1-pro-free`) through Vercel AI Gateway, with provider contracts kept open for ElevenLabs, Inworld, MiniMax, OpenAI, and local experiments. Gemini TTS is unwired.
 
 ## Workspace
 
@@ -29,8 +29,8 @@ Gemini Batch is unwired. Narration jobs render Fish Audio chunks synchronously i
 
 The audio service generates intro/outro jingle assets deterministically at runtime and reuses them from its render directory. Workers do not need committed jingle MP3s; they only store and serve final episode MP3s from R2.
 
-The audio service runs as a single Cloudflare Container instance (`AudioServiceContainer` Durable Object on `podnarr-processor`). The processor reaches it through the `AUDIO_SERVICE` binding, so it has no public URL. Job state lives on the container's ephemeral disk; the container stays awake for 30 minutes after the last request (longer than the 15-minute poll gap) and scales to zero when idle. Deploying the processor replaces the container, which drops in-flight narration jobs — same as a Railway redeploy did. Container secrets (`FISH_AUDIO_API_KEY`, `OPENROUTER_API_KEY`, `DISCORD_WEBHOOK_URL`, optional `AUDIO_SERVICE_TOKEN`) are set as worker secrets on `podnarr-processor` and forwarded into the container. Optional `OPENROUTER_IMAGE_MODEL` defaults to `openai/gpt-5.6-luna`.
+The audio service runs as a single Cloudflare Container instance (`AudioServiceContainer` Durable Object on `podnarr-processor`). The processor reaches it through the `AUDIO_SERVICE` binding, so it has no public URL. Job state lives on the container's ephemeral disk; the container stays awake for 30 minutes after the last request (longer than the 15-minute poll gap) and scales to zero when idle. Deploying the processor replaces the container, which drops in-flight narration jobs — same as a Railway redeploy did. Container secrets (`AI_GATEWAY_API_KEY`, `OPENROUTER_API_KEY`, `DISCORD_WEBHOOK_URL`, optional `AUDIO_SERVICE_TOKEN`) are set as worker secrets on `podnarr-processor` and forwarded into the container. Optional `OPENROUTER_IMAGE_MODEL` defaults to `openai/gpt-5.6-luna`.
 
-Narration uses SpeechSDK with Fish Audio's temporary `s2.1-pro-free` model. Set `FISH_AUDIO_API_KEY` and `FISH_AUDIO_VOICE` (a Fish reference voice id) on `podnarr-processor`. Failed Fish chunks fail the job; they do not fall back to Gemini TTS.
+Narration uses Vercel AI Gateway with Fish Audio's `fish-audio/s2.1-pro-free` model (promo pricing through 18 Sep 2026, then the `-free` suffix stops serving instead of starting a bill). Set `AI_GATEWAY_API_KEY` and `FISH_AUDIO_VOICE` (a Fish reference voice id) on `podnarr-processor`. Failed Fish chunks fail the job; they do not fall back to Gemini TTS.
 
 The API skips obvious non-episode posts before queueing narration, including Open Threads, hidden open threads, meetup announcements, simple announcements, and very short posts.
