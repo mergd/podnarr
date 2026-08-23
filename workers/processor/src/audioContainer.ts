@@ -15,6 +15,7 @@ export class AudioServiceContainer extends Container<Env> {
     OPENROUTER_API_KEY: workerEnv.OPENROUTER_API_KEY ?? "",
     OPENROUTER_IMAGE_MODEL: workerEnv.OPENROUTER_IMAGE_MODEL ?? "openai/gpt-5.6-luna",
     AI_GATEWAY_API_KEY: workerEnv.AI_GATEWAY_API_KEY ?? "",
+    FISH_AUDIO_API_KEY: workerEnv.FISH_AUDIO_API_KEY ?? "",
     FISH_AUDIO_VOICE: workerEnv.FISH_AUDIO_VOICE ?? workerEnv.DEFAULT_TTS_VOICE ?? "",
     AUDIO_SERVICE_TOKEN: workerEnv.AUDIO_SERVICE_TOKEN ?? "",
     DISCORD_WEBHOOK_URL: workerEnv.DISCORD_WEBHOOK_URL ?? "",
