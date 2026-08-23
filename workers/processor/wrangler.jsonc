@@ -10,7 +10,11 @@
       "image": "../../services/audio/Dockerfile",
       "image_build_context": "../../",
       "max_instances": 1,
-      "instance_type": "standard-1"
+      "instance_type": {
+        "vcpu": 1,
+        "memory_mib": 3072,
+        "disk_mb": 6000
+      }
     }
   ],
   "durable_objects": {
@@ -52,7 +56,7 @@
         "queue": "podnarr-processing",
         "max_batch_size": 1,
         "max_concurrency": 1,
-        "max_retries": 2,
+        "max_retries": 1,
         "retry_delay": 30
       }
     ]

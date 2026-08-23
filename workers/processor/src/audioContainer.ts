@@ -24,6 +24,11 @@ export class AudioServiceContainer extends Container<Env> {
   // request-activated renderer/assembler and should scale back to zero.
   sleepAfter = "1m";
 
+  override async onActivityExpired(): Promise<void> {
+    console.log("Audio service idle timeout expired, destroying container");
+    await this.destroy();
+  }
+
   constructor(ctx: DurableObjectState<{}>, env: Env) {
     super(ctx, env);
     this.envVars = audioServiceEnvVars(env);
