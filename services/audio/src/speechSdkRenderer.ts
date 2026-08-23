@@ -3,7 +3,7 @@ import { gateway } from "@ai-sdk/gateway";
 
 import type { TtsProvider } from "@podnarr/shared/tts";
 
-const FISH_GATEWAY_MODEL = "fish-audio/s2.1-pro-free";
+const FISH_GATEWAY_MODEL = "fish-audio/s2.1-pro";
 const FISH_DIRECT_MODEL = "s2.1-pro-free";
 
 export interface SpeechRenderResult {
@@ -15,12 +15,12 @@ export interface SpeechRenderResult {
 
 function fishGatewayModelId(model: string): string {
   if (model.startsWith("fish-audio/")) {
-    return model.endsWith("-free") ? model : `${model}-free`;
+    return model.replace(/-free$/, "");
   }
   if (!model || model === "s2.1-pro" || model === "s2.1-pro-free") {
     return FISH_GATEWAY_MODEL;
   }
-  return `fish-audio/${model.endsWith("-free") ? model : `${model}-free`}`;
+  return `fish-audio/${model.replace(/-free$/, "")}`;
 }
 
 function fishDirectModelId(model: string): string {
@@ -29,9 +29,14 @@ function fishDirectModelId(model: string): string {
   return id;
 }
 
-function isGatewayBillingBlock(error: unknown): boolean {
+function isGatewayUnavailable(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /credit card on file/i.test(message) || /AI Gateway requires a valid credit card/i.test(message);
+  return (
+    /credit card on file/i.test(message) ||
+    /AI Gateway requires a valid credit card/i.test(message) ||
+    /Free tier users do not have access/i.test(message) ||
+    /Upgrade to paid credits/i.test(message)
+  );
 }
 
 async function renderFishViaGateway(text: string, model: string, voice: string): Promise<SpeechRenderResult> {
@@ -92,7 +97,7 @@ async function renderFish(text: string, model: string, voice: string): Promise<S
   try {
     return await renderFishViaGateway(text, model, voice);
   } catch (error) {
-    if (!isGatewayBillingBlock(error) && process.env.AI_GATEWAY_API_KEY) {
+    if (!isGatewayUnavailable(error) && process.env.AI_GATEWAY_API_KEY) {
       throw error;
     }
     return renderFishDirect(text, model, voice);
