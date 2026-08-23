@@ -8,10 +8,11 @@ import {
 } from "@podnarr/shared/queue";
 import { DEFAULT_TTS_CONFIG, resolveActiveTtsConfig, type NarrationRequest, type TtsProvider } from "@podnarr/shared/tts";
 
+import { audioServiceEnvVars, AudioServiceContainer } from "./audioContainer";
 import type { Env } from "./env";
 import { buildNarrationScript, estimateAudioMinutes } from "./lib/script";
 
-export { AudioServiceContainer } from "./audioContainer";
+export { AudioServiceContainer };
 
 type NarrationStatus = "queued" | "running" | "assembling" | "succeeded" | "failed";
 
@@ -80,11 +81,14 @@ async function alertDiscord(env: Env, title: string, description: string): Promi
   }
 }
 
-function audioServiceRequest(env: Env, path: string, init?: RequestInit): Promise<Response> {
+async function audioServiceRequest(env: Env, path: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
   if (!headers.has("content-type")) headers.set("content-type", "application/json");
   if (env.AUDIO_SERVICE_TOKEN) headers.set("authorization", `Bearer ${env.AUDIO_SERVICE_TOKEN}`);
   const container = getContainer(env.AUDIO_SERVICE);
+  await container.startAndWaitForPorts({
+    startOptions: { envVars: audioServiceEnvVars(env) }
+  });
   return container.fetch(new Request(`http://audio-service${path}`, { ...init, headers }));
 }
 
