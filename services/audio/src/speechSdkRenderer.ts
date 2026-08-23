@@ -35,7 +35,9 @@ function isGatewayUnavailable(error: unknown): boolean {
     /credit card on file/i.test(message) ||
     /AI Gateway requires a valid credit card/i.test(message) ||
     /Free tier users do not have access/i.test(message) ||
-    /Upgrade to paid credits/i.test(message)
+    /Upgrade to paid credits/i.test(message) ||
+    /GatewayRateLimitError/i.test(message) ||
+    /rate limit/i.test(message)
   );
 }
 
@@ -49,7 +51,7 @@ async function renderFishViaGateway(text: string, model: string, voice: string):
     text,
     voice,
     outputFormat: "mp3",
-    maxRetries: 2
+    maxRetries: 0
   });
   return {
     audio: result.audio.uint8Array,
@@ -75,7 +77,6 @@ async function renderFishDirect(text: string, model: string, voice: string): Pro
       text,
       reference_id: voice,
       format: "mp3",
-      sample_rate: 24_000,
       normalize: true
     })
   });
