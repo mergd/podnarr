@@ -325,7 +325,9 @@ async function handleRenderChunk(
       body: JSON.stringify({ provider: job.provider, model: job.model, voice: job.voice, text: chunk.text })
     });
     if (!response.ok || !response.body) throw new Error(`TTS chunk request failed with ${response.status}: ${(await response.text()).slice(0, 200)}`);
-    await env.AUDIO_BUCKET.put(chunk.r2_key, response.body, {
+    const pcm = await response.arrayBuffer();
+    if (pcm.byteLength === 0) throw new Error("TTS chunk request returned empty audio.");
+    await env.AUDIO_BUCKET.put(chunk.r2_key, pcm, {
       httpMetadata: { contentType: "application/x-podnarr-pcm" }
     });
     const providerUsed = response.headers.get("x-podnarr-provider") ?? job.provider;
@@ -431,8 +433,10 @@ async function handleAssemble(env: Env, message: Extract<PostQueueMessage, { typ
       body: r2PcmStream(env, chunks.results)
     });
     if (!response.ok || !response.body) throw new Error(`Episode assembly failed with ${response.status}: ${(await response.text()).slice(0, 200)}`);
+    const mp3 = await response.arrayBuffer();
+    if (mp3.byteLength === 0) throw new Error("Episode assembly returned empty audio.");
     const key = `episodes/${job.publication_id}/${job.post_id}.mp3`;
-    await env.AUDIO_BUCKET.put(key, response.body, {
+    await env.AUDIO_BUCKET.put(key, mp3, {
       httpMetadata: { contentType: "audio/mpeg", cacheControl: "public, max-age=31536000, immutable" }
     });
     const durationSeconds = Number(response.headers.get("x-podnarr-duration-seconds")) || null;
