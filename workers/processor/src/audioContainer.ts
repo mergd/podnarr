@@ -1,9 +1,6 @@
-import { env } from "cloudflare:workers";
 import { Container } from "@cloudflare/containers";
 
 import type { Env } from "./env";
-
-const workerEnv = env as Env;
 
 export function audioServiceEnvVars(source: Env): Record<string, string> {
   return {
@@ -26,5 +23,9 @@ export class AudioServiceContainer extends Container<Env> {
   // Narration state and PCM chunks live in D1/R2. The container is only a
   // request-activated renderer/assembler and should scale back to zero.
   sleepAfter = "1m";
-  envVars = audioServiceEnvVars(workerEnv);
+
+  constructor(ctx: DurableObjectState<{}>, env: Env) {
+    super(ctx, env);
+    this.envVars = audioServiceEnvVars(env);
+  }
 }
