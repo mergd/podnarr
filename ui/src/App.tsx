@@ -115,7 +115,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         <div className={styles.headerInner}>
           <button className={styles.brand} onClick={() => navigate("/")} type="button">
             <span className={styles.brandMark}>
-              <PodnarrLogo size={14} />
+              <PodnarrLogo size="100%" />
             </span>
             <span className={styles.brandName}>podnarr</span>
           </button>
@@ -132,7 +132,7 @@ function Cover({ src, alt = "" }: { src: string | null; alt?: string }) {
     <div className={styles.coverWrap}>
       <img alt={alt} className={styles.cover} src={src ?? "/icon.svg"} />
       <span className={styles.coverCorner} aria-hidden="true">
-        <PodnarrLogo size={10} />
+        <PodnarrLogo size="100%" />
       </span>
     </div>
   );

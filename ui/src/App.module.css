@@ -45,6 +45,7 @@
   width: 1.5rem;
   height: 1.5rem;
   border-radius: var(--radius-sm);
+  overflow: hidden;
   background: var(--gradient-button);
   box-shadow: var(--shadow-button);
   color: #fff;
@@ -132,6 +133,7 @@
   place-items: center;
   width: 1.4rem;
   height: 1.4rem;
+  overflow: hidden;
   border-top-right-radius: var(--radius-md);
   background: var(--gradient-button);
   box-shadow: var(--shadow-button);

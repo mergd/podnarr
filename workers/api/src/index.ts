@@ -2,7 +2,7 @@ import type { RegisterPublicationRequest } from "@podnarr/shared/api";
 import type { TtsProvider } from "@podnarr/shared/tts";
 
 import type { Env } from "./env";
-import { generateBrandedArtwork } from "./lib/artwork";
+import { brandedArtworkSourceKey, generateBrandedArtwork } from "./lib/artwork";
 import {
   enqueuePosts,
   getAudioSource,
@@ -73,8 +73,9 @@ async function syncBrandedArtwork(env: Env, publication: Awaited<ReturnType<type
     return;
   }
 
+  const sourceKey = brandedArtworkSourceKey(sourceImageUrl);
   const alreadyBrandedForThisSource =
-    publication.branded_image_key !== null && publication.branded_image_source_url === sourceImageUrl;
+    publication.branded_image_key !== null && publication.branded_image_source_url === sourceKey;
   if (alreadyBrandedForThisSource) {
     return;
   }
@@ -85,7 +86,7 @@ async function syncBrandedArtwork(env: Env, publication: Awaited<ReturnType<type
     await env.AUDIO_BUCKET.put(key, bytes, {
       httpMetadata: { contentType, cacheControl: "public, max-age=86400" }
     });
-    await updatePublicationBrandedArtwork(env.DB, publication.id, key, sourceImageUrl);
+    await updatePublicationBrandedArtwork(env.DB, publication.id, key, sourceKey);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`[artwork] failed to generate branded artwork for ${publication.slug}: ${message}`);

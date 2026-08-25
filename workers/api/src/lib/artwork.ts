@@ -6,6 +6,13 @@ const OUTPUT_SIZE = 1400;
 const BADGE_FRACTION = 0.22;
 const BADGE_MARGIN_FRACTION = 0.04;
 
+/** Bump when the corner mark changes so existing composites regenerate on refresh. */
+export const ARTWORK_BADGE_REVISION = 3;
+
+export function brandedArtworkSourceKey(sourceImageUrl: string): string {
+  return `${sourceImageUrl}#badge-${ARTWORK_BADGE_REVISION}`;
+}
+
 let wasmReady: Promise<void> | null = null;
 
 function ensureWasmReady(): Promise<void> {
@@ -49,21 +56,25 @@ function buildCompositeSvg(sourceDataUri: string): string {
   const margin = Math.round(OUTPUT_SIZE * BADGE_MARGIN_FRACTION);
   const badgeX = OUTPUT_SIZE - margin - badgeSize;
   const badgeY = OUTPUT_SIZE - margin - badgeSize;
-  const radius = Math.round(badgeSize * 0.22);
-
-  // "P" glyph as a path so the worker runtime does not depend on installed fonts.
-  const glyphPath =
-    "M 30 18 L 30 82 L 42 82 L 42 60 L 56 60 C 70 60 80 51 80 39 C 80 27 70 18 56 18 Z " +
-    "M 42 28 L 55 28 C 63 28 68 32 68 39 C 68 46 63 50 55 50 L 42 50 Z";
-  const glyphScale = badgeSize / 100;
+  const markScale = badgeSize / 64;
 
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${OUTPUT_SIZE}" height="${OUTPUT_SIZE}" viewBox="0 0 ${OUTPUT_SIZE} ${OUTPUT_SIZE}">`,
+    `<defs>`,
+    `<linearGradient id="podnarr-badge-fill" x1="0" y1="0" x2="0" y2="1">`,
+    `<stop offset="0" stop-color="#5a9ae6"/>`,
+    `<stop offset="0.5" stop-color="#3b7dd8"/>`,
+    `<stop offset="1" stop-color="#2b6ac0"/>`,
+    `</linearGradient>`,
+    `</defs>`,
     `<image x="0" y="0" width="${OUTPUT_SIZE}" height="${OUTPUT_SIZE}" preserveAspectRatio="xMidYMid slice" href="${sourceDataUri}" />`,
-    `<g>`,
-    `<rect x="${badgeX}" y="${badgeY}" width="${badgeSize}" height="${badgeSize}" rx="${radius}" ry="${radius}" fill="rgba(15,15,20,0.92)" stroke="rgba(255,255,255,0.16)" stroke-width="2" />`,
-    `<g transform="translate(${badgeX} ${badgeY}) scale(${glyphScale})">`,
-    `<path d="${glyphPath}" fill="#ffffff" fill-rule="evenodd" />`,
+    `<g transform="translate(${badgeX} ${badgeY}) scale(${markScale})">`,
+    `<rect width="64" height="64" rx="14" fill="url(#podnarr-badge-fill)" stroke="rgba(255,255,255,0.28)" stroke-width="1.2" />`,
+    `<g fill="none" stroke="#ffffff" stroke-width="5.5" stroke-linecap="round">`,
+    `<circle cx="20" cy="44" r="5" fill="#ffffff" stroke="none" />`,
+    `<path d="M30 44a10 10 0 0 0-10-10" />`,
+    `<path d="M40 44a20 20 0 0 0-20-20" />`,
+    `<path d="M50 44A30 30 0 0 0 20 14" />`,
     `</g>`,
     `</g>`,
     `</svg>`

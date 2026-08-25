@@ -1,24 +1,25 @@
 import type { SVGProps } from "react";
 
-export function PodnarrLogo({ size = 16, ...props }: { size?: number } & SVGProps<SVGSVGElement>) {
+export function PodnarrLogo({
+  size = 16,
+  ...props
+}: { size?: number | string } & SVGProps<SVGSVGElement>) {
   return (
     <svg
       aria-hidden="true"
       fill="none"
       height={size}
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2.25}
-      viewBox="0 0 24 24"
+      viewBox="0 0 64 64"
       width={size}
       xmlns="http://www.w3.org/2000/svg"
       {...props}
     >
-      <circle cx="6" cy="18" fill="currentColor" r="2.25" stroke="none" />
-      <path d="M10 18a4 4 0 0 0-4-4" />
-      <path d="M14 18a8 8 0 0 0-8-8" />
-      <path d="M18 18A12 12 0 0 0 6 6" />
+      <circle cx="20" cy="44" fill="currentColor" r="5" />
+      <g stroke="currentColor" strokeLinecap="round" strokeWidth="5.5">
+        <path d="M30 44a10 10 0 0 0-10-10" />
+        <path d="M40 44a20 20 0 0 0-20-20" />
+        <path d="M50 44A30 30 0 0 0 20 14" />
+      </g>
     </svg>
   );
 }
