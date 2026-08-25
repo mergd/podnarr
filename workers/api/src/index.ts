@@ -163,19 +163,27 @@ async function handleAdminGenerate(request: Request, env: Env, postId: number): 
   if (!row) {
     return json({ error: "Not found" }, 404);
   }
-  await env.DB
-    .prepare(
-      `UPDATE posts
-      SET status = 'pending',
-        tts_provider = COALESCE(?2, tts_provider),
-        tts_model = COALESCE(?3, tts_model),
-        tts_voice = COALESCE(?4, tts_voice),
-        last_error = NULL,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?1`
-    )
-    .bind(postId, body.provider ?? null, body.model ?? null, body.voice ?? null)
-    .run();
+  await env.DB.batch([
+    env.DB
+      .prepare(
+        `UPDATE posts
+        SET status = 'pending',
+          tts_provider = COALESCE(?2, tts_provider),
+          tts_model = COALESCE(?3, tts_model),
+          tts_voice = COALESCE(?4, tts_voice),
+          last_error = NULL,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?1`
+      )
+      .bind(postId, body.provider ?? null, body.model ?? null, body.voice ?? null),
+    env.DB
+      .prepare(
+        `UPDATE narration_jobs
+        SET status = 'failed', last_error = 'Requeued by admin generate', updated_at = CURRENT_TIMESTAMP
+        WHERE post_id = ?1 AND status != 'failed'`
+      )
+      .bind(postId)
+  ]);
   const queuedPosts = await enqueuePosts(env, row.publication_id, [postId]);
   return json({ queuedPosts, overrides: { provider: body.provider ?? null, model: body.model ?? null, voice: body.voice ?? null } });
 }

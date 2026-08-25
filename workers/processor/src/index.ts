@@ -23,6 +23,7 @@ interface PostRow {
   title: string;
   author: string | null;
   pub_date: string | null;
+  html_content: string | null;
   text_content: string | null;
   visual_metadata_json: string;
   tts_provider: string | null;
@@ -240,6 +241,7 @@ async function handleGenerate(env: Env, message: Extract<PostQueueMessage, { typ
   const sourceScript = buildNarrationScript({
     title: post.title,
     author: post.author,
+    htmlContent: post.html_content,
     textContent: post.text_content,
     visualMetadataJson: post.visual_metadata_json
   });

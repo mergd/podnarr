@@ -1,3 +1,4 @@
+import { htmlAttrValue, htmlToPlainText } from "@podnarr/shared/htmlToSpeech";
 import { XMLParser } from "fast-xml-parser";
 
 export interface SourcePublication {
@@ -70,60 +71,8 @@ function firstString(...values: unknown[]): string | null {
   return null;
 }
 
-function decodeHtmlEntities(value: string): string {
-  return value
-    .replace(/&#x([0-9a-f]+);/gi, (_match, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_match, decimal: string) => String.fromCodePoint(Number.parseInt(decimal, 10)))
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, "\"")
-    .replace(/&apos;/g, "'")
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
-}
-
-function attrValue(attrs: string, name: string): string | null {
-  const match = new RegExp(`${name}=["']([^"']*)["']`, "i").exec(attrs);
-  return match?.[1] ? decodeHtmlEntities(match[1]).trim() || null : null;
-}
-
-function escapeMarkerValue(value: string): string {
-  return value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"");
-}
-
-function imageNarrationMarker(attrs: string): string {
-  const src = attrValue(attrs, "src");
-  const parts = [src ? `src="${escapeMarkerValue(src)}"` : null].filter(Boolean);
-  return parts.length > 0 ? `\n\n[[podnarr-visual ${parts.join(" ")}]]\n\n` : "\n\n[[podnarr-visual]]\n\n";
-}
-
 function stripHtml(html: string | null): string | null {
-  if (!html) {
-    return null;
-  }
-
-  const withStructuralBreaks = html
-    .replace(/<h[1-6]\b[^>]*>([\s\S]*?)<\/h[1-6]>/gi, (_match, heading: string) => {
-      const label = decodeHtmlEntities(heading.replace(/<[^>]+>/g, " ").replace(/[ \t]+/g, " ").trim());
-      return label ? `\n\n${label}\n\n` : "\n\n";
-    })
-    .replace(/<blockquote\b[^>]*>/gi, "\n\n")
-    .replace(/<\/blockquote>/gi, "\n\n")
-    .replace(/<img\b([^>]*)>/gi, (_match, attrs: string) => imageNarrationMarker(attrs));
-
-  const text = withStructuralBreaks
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/(p|div|h[1-6]|li|blockquote|tr)>/gi, "\n")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&[a-zA-Z0-9#]+;/g, (entity) => decodeHtmlEntities(entity))
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-
-  return text || null;
+  return htmlToPlainText(html);
 }
 
 function normalizeIsoDate(value: string | null): string | null {
@@ -162,7 +111,7 @@ function pickImageFromHtml(html: string | null): string | null {
   const imgPattern = /<img\b([^>]*)>/gi;
   let match: RegExpExecArray | null;
   while ((match = imgPattern.exec(html)) !== null) {
-    const src = attrValue(match[1] ?? "", "src");
+    const src = htmlAttrValue(match[1] ?? "", "src");
     if (src && isUsablePostImage(src)) {
       return upgradeImageQuality(src);
     }
@@ -209,8 +158,8 @@ function extractVisualMetadata(html: string | null): VisualMetadata[] {
   let match: RegExpExecArray | null;
   while ((match = imgPattern.exec(html)) !== null) {
     const attrs = match[1] ?? "";
-    const src = attrValue(attrs, "src") ?? undefined;
-    const alt = attrValue(attrs, "alt") ?? undefined;
+    const src = htmlAttrValue(attrs, "src") ?? undefined;
+    const alt = htmlAttrValue(attrs, "alt") ?? undefined;
     visuals.push({ kind: "image", src, alt });
   }
 
