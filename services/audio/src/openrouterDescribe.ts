@@ -48,6 +48,7 @@ export async function describeImageWithOpenRouter(mimeType: string, data: string
     },
     body: JSON.stringify({
       model: OPENROUTER_IMAGE_MODEL,
+      ...(OPENROUTER_IMAGE_MODEL === "openai/gpt-6-luna" ? { reasoning: { effort: "none" } } : {}),
       max_tokens: 160,
       messages: [
         {
