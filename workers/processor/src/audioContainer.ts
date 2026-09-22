@@ -6,7 +6,7 @@ export function audioServiceEnvVars(source: Env): Record<string, string> {
   return {
     ENABLE_MOCK_RENDERER: "false",
     OPENROUTER_API_KEY: source.OPENROUTER_API_KEY ?? "",
-    OPENROUTER_IMAGE_MODEL: source.OPENROUTER_IMAGE_MODEL ?? "openai/gpt-5.6-luna",
+    OPENROUTER_IMAGE_MODEL: source.OPENROUTER_IMAGE_MODEL ?? "openai/gpt-6-luna",
     AI_GATEWAY_API_KEY: source.AI_GATEWAY_API_KEY ?? "",
     FISH_AUDIO_API_KEY: source.FISH_AUDIO_API_KEY ?? "",
     FISH_AUDIO_VOICE: source.FISH_AUDIO_VOICE ?? source.DEFAULT_TTS_VOICE ?? "",

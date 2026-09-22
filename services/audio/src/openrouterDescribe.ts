@@ -1,5 +1,5 @@
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
-const OPENROUTER_IMAGE_MODEL = process.env.OPENROUTER_IMAGE_MODEL ?? "openai/gpt-5.6-luna";
+const OPENROUTER_IMAGE_MODEL = process.env.OPENROUTER_IMAGE_MODEL ?? "openai/gpt-6-luna";
 const OPENROUTER_REFERER = process.env.PODNARR_SITE_URL
   ? `https://${process.env.PODNARR_SITE_URL.replace(/^https?:\/\//, "")}`
   : "https://podnarr.yet-to-be.com";
@@ -48,6 +48,7 @@ export async function describeImageWithOpenRouter(mimeType: string, data: string
     },
     body: JSON.stringify({
       model: OPENROUTER_IMAGE_MODEL,
+      ...(OPENROUTER_IMAGE_MODEL === "openai/gpt-6-luna" ? { reasoning: { effort: "none" } } : {}),
       max_tokens: 160,
       messages: [
         {
