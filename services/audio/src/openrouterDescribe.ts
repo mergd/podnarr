@@ -1,5 +1,5 @@
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
-const OPENROUTER_IMAGE_MODEL = process.env.OPENROUTER_IMAGE_MODEL ?? "openai/gpt-5.6-luna";
+const OPENROUTER_IMAGE_MODEL = process.env.OPENROUTER_IMAGE_MODEL ?? "openai/gpt-6-luna";
 const OPENROUTER_REFERER = process.env.PODNARR_SITE_URL
   ? `https://${process.env.PODNARR_SITE_URL.replace(/^https?:\/\//, "")}`
   : "https://podnarr.yet-to-be.com";
