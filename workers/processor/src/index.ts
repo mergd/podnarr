@@ -11,6 +11,7 @@ import { DEFAULT_TTS_CONFIG, resolveActiveTtsConfig, type NarrationRequest, type
 import { audioServiceEnvVars, AudioServiceContainer } from "./audioContainer";
 import type { Env } from "./env";
 import { buildNarrationScript, estimateAudioMinutes } from "./lib/script";
+import { cleanupCompletedNarrationPcm, tryCleanupNarrationPcm } from "./lib/pcmCleanup";
 
 export { AudioServiceContainer };
 
@@ -454,7 +455,9 @@ async function handleAssemble(env: Env, message: Extract<PostQueueMessage, { typ
     ]);
   } catch (error) {
     await retryAssemblyOrFail(env, message, job, error);
+    return;
   }
+  await tryCleanupNarrationPcm(env, job.id);
 }
 
 async function recoverStaleNarrations(env: Env): Promise<void> {
@@ -502,6 +505,7 @@ export default {
 
   async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
     await recoverStaleNarrations(env);
+    await cleanupCompletedNarrationPcm(env);
   },
 
   async queue(batch: MessageBatch<PostQueueMessage>, env: Env): Promise<void> {
